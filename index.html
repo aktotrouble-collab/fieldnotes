@@ -3682,14 +3682,14 @@
         const elapsed = (performance.now() - play.start) / 1000 - play.lead;
         if (gameCameraMode === "runner") {
           const hitter = play.runners.find((r) => r.from === 0);
-          return { ball: gamePlayBallPoint(play, elapsed), runner: hitter ? basePathPoint(hitter.from, hitter.to, elapsed - hitter.delay, hitter.perBase) : null, time: elapsed };
+          return { ball: gamePlayBallPoint(play, elapsed), runner: hitter ? basePathPoint(hitter.from, hitter.to, elapsed - hitter.delay, hitter.perBase, hitter.run) : null, time: elapsed };
         }
-        const eligible = play.runners.filter((r) => elapsed >= r.delay && elapsed < r.delay + (r.to - r.from) * r.perBase);
+        const eligible = play.runners.filter((r) => elapsed >= r.delay && elapsed < r.delay + (r.duration ?? (r.to - r.from) * r.perBase));
         const runner = eligible.find((r) => r === cameraRunner) || eligible.slice().sort((a, b) => b.from - a.from)[0];
         if (runner) cameraRunner = runner;
         return {
           ball: gamePlayBallPoint(play, elapsed),
-          runner: runner ? basePathPoint(runner.from, runner.to, elapsed - runner.delay, runner.perBase) : null,
+          runner: runner ? basePathPoint(runner.from, runner.to, elapsed - runner.delay, runner.perBase, runner.run) : null,
           time: elapsed
         };
       }
@@ -3794,8 +3794,10 @@
         for (const key of ["elevation", "scale", "targetX", "targetY"]) camera[key] += (target[key] - camera[key]) * blend;
       }
 
-      function basePathPoint(from, to, seconds, perBase) {
-        const progress = Math.max(0, Math.min(to - from, seconds / perBase));
+      function basePathPoint(from, to, seconds, perBase, run) {
+        const t = Math.max(0, seconds), ramp = run ? Math.min(t, run.ramp) : 0;
+        const runningTime = run ? run.start * ramp + (1 - run.start) * ramp * ramp / (2 * run.ramp) + Math.max(0, t - run.ramp) : t;
+        const progress = Math.max(0, Math.min(to - from, runningTime / perBase));
         const index = Math.min(Math.floor(from + progress), 3);
         const next = Math.min(index + 1, 4);
         const frac = from + progress - index;
@@ -4140,7 +4142,7 @@
         homeBusy = !play ? !!scene.batter : (elapsed < 0 || play.runners.some((runner) => {
           if (runner.from !== 0) return false;
           const seconds = elapsed - runner.delay;
-          return seconds < 0 || nearHome(basePathPoint(runner.from, runner.to, seconds, runner.perBase));
+          return seconds < 0 || nearHome(basePathPoint(runner.from, runner.to, seconds, runner.perBase, runner.run));
         }));
         for (const fielder of scene.fielders) {
           let spot = fielder;
@@ -4188,8 +4190,8 @@
               drawGameActor({ ...GAME_BASES[runner.from], height: runner.height, weight: runner.weight }, "#d27637", runner.name, width, height, true);
               continue;
             }
-            const point = basePathPoint(runner.from, runner.to, Math.max(0, seconds), runner.perBase);
-            const done = seconds >= (runner.to - runner.from) * runner.perBase;
+            const point = basePathPoint(runner.from, runner.to, Math.max(0, seconds), runner.perBase, runner.run);
+            const done = seconds >= (runner.duration ?? (runner.to - runner.from) * runner.perBase);
             if (runner.out && done) continue;
             drawGameActor({ ...point, height: runner.height, weight: runner.weight }, runner.out && done ? "#b3392f" : "#d27637", runner.name, width, height, true);
           }
@@ -4332,7 +4334,7 @@
           const points = data.points;
           if (!points || points.length < 2) return;
           const last = points[points.length - 1];
-          const runnerTimes = (data.runners || []).map((runner) => runner.delay + (runner.to - runner.from) * runner.perBase);
+          const runnerTimes = (data.runners || []).map((runner) => runner.delay + (runner.duration ?? (runner.to - runner.from) * runner.perBase));
           gameState.play = {
             start: performance.now(),
             points,

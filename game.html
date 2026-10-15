@@ -76,6 +76,16 @@
     .pitchinfo { font-weight:600; min-height:20px; }
     .banner { font-size:15px; font-weight:700; }
     .hidden { display:none !important; }
+    #coaching-options { margin-top:8px; }
+    #btn-coaching[aria-expanded="true"] { border-color:var(--green); color:var(--green); }
+    #coaching-content { margin-top:8px; padding:12px; border:1px solid var(--line); border-radius:8px; }
+    #camera-options { position:absolute; top:10px; right:10px; z-index:7; }
+    #camera-options > summary { display:flex; align-items:center; justify-content:center; width:40px; height:36px; border:1px solid var(--line); border-radius:8px; background:var(--card); cursor:pointer; list-style:none; }
+    #camera-options > summary::-webkit-details-marker { display:none; }
+    #camera-options[open] > summary { color:var(--green); border-color:var(--green); }
+    #camera-content { position:absolute; right:0; margin-top:6px; padding:12px; width:min(310px,calc(100vw - 72px)); background:var(--card); border:1px solid var(--line); border-radius:8px; box-shadow:0 6px 22px #0003; }
+    #camera-content select { max-width:100%; }
+    #camera-content button { margin-top:10px; }
     #shift-custom { max-width:720px; padding:12px; border:1px solid var(--line); border-radius:10px; }
     #shift-diagram { display:block; width:100%; max-height:480px; background:#dce9d2; border-radius:8px; touch-action:none; }
     #shift-diagram [data-fielder] { cursor:grab; }
@@ -250,6 +260,23 @@
             <div id="field-wrap">
               <iframe id="field-frame" title="3D field" src="index.html?embed=1&amp;game=1&amp;park=dodgers" style="width:100%;height:clamp(640px,78vh,960px);border:0;border-radius:8px;display:block"></iframe>
               <div id="bug"></div>
+              <details id="camera-options">
+                <summary aria-label="Camera options" title="Camera options"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 7h4l2-3h6l2 3h4v13H3z"/><circle cx="12" cy="13" r="4"/></svg></summary>
+                <div id="camera-content">
+                  <label>Camera <select id="camera-mode">
+                    <option value="free">Free / User Control</option>
+                    <option value="field">Field Mode / Walk Around</option>
+                    <option value="action">Wide Action</option>
+                    <option value="ball">Follow Ball</option>
+                    <option value="runner">Hitter / Third Person</option>
+                    <option value="high">Bird's-eye</option>
+                    <option value="first">First-base Broadcast</option>
+                    <option value="third">Third-base Broadcast</option>
+                  </select></label>
+                  <div class="muted" style="margin-top:8px">Scroll, pinch or use +/- to zoom without leaving your view. Drag to look around in follow modes; release to resume tracking. Pan to return to Free.</div>
+                  <button id="btn-field-mode" title="Field-level free camera. Up/down walk, left/right turn, drag to look. Your position is remembered.">Enter Field Mode</button>
+                </div>
+              </details>
               <div id="chal-menu"></div>
               <div id="zone-mini"><canvas id="zone-mini-canvas" width="340" height="400"></canvas></div>
               <div id="zone-overlay">
@@ -275,15 +302,22 @@
               </select>
               <button id="btn-skip" class="hidden">Skip animations</button>
               <button id="btn-replay">Replay last ball</button>
-              <button id="btn-challenge" disabled>Challenge</button>
-              <span class="muted" id="chal-left"></span>
+              <button id="btn-coaching" aria-expanded="false" aria-controls="coaching-options">Coaching Options</button>
             </div>
-            <div class="row hidden" id="steal-row" style="margin-top:8px"></div>
-            <div id="coach-panel" class="hidden" style="margin-top:8px;padding:8px 10px;border:1px solid #0002;border-radius:8px"></div>
-            <div class="row" id="shift-row" style="margin-top:8px"></div>
-            <div class="hidden" id="shift-custom" style="margin-top:6px"></div>
+            <div id="coaching-options" class="hidden">
+              <div id="coaching-content">
+                <div class="row"><button id="btn-challenge" disabled>Challenge on-field call</button><button id="btn-accept-call" class="hidden">Accept call / Continue</button><span class="muted" id="chal-left"></span>
+                  <span class="muted">Umpires <i class="tip" tabindex="0" data-tip="Players follow the umpire's ruling during the play, even if it is wrong. Live play continues until all active runners are stopped on bases and one fielder has held the ball for at least 1.5 seconds. Field-call reviews have no countdown: challenge, replay, or accept the call to continue. ABS stays over the strike zone with a 2-second limit. A failed challenge costs one (2 ABS and 1 field per team); overturning a bad call is free.">i</i></span>
+                </div>
+                <div class="row hidden" id="steal-row" style="margin-top:8px"></div>
+                <div id="coach-panel" class="hidden" style="margin-top:8px;padding:8px 10px;border:1px solid #0002;border-radius:8px"></div>
+                <div class="row" id="shift-row" style="margin-top:8px"></div>
+                <div class="hidden" id="shift-custom" style="margin-top:6px"></div>
+                <div class="row" id="relay-row" style="margin-top:6px"><label><input type="checkbox" id="relay-on"> Throw via cutoff man (relay, key R) <i class="tip" tabindex="0" data-tip="Routes your next throw through the cutoff man instead of throwing directly. Useful on long outfield throws.">i</i></label><span class="muted" id="relay-hint"></span></div>
+                <label class="muted" style="margin-top:10px">Baserunning / throw decisions <i class="tip" tabindex="0" data-tip="Batting: click GO / STOP / TURN BACK by the base your runner is approaching (keys G / S / B). Fielding: pick the throw target as the fielder gets to the ball. Real-time keeps the play moving; Pause stops it for each decision. Unanswered decisions use the AI's choice.">i</i> <select id="decision"><option value="real" selected>Real-time</option><option value="pause">Pause for each decision</option></select></label>
+              </div>
+            </div>
             <div class="pitchinfo" id="pitch-info" style="margin-top:8px"></div>
-            <div class="row" id="relay-row" style="margin-top:6px"><label><input type="checkbox" id="relay-on"> Throw via cutoff man (relay, key R) <i class="tip" tabindex="0" data-tip="Routes your next throw through the cutoff man instead of throwing directly. Useful on long outfield throws.">i</i></label><span class="muted" id="relay-hint"></span></div>
             <div class="row hidden" id="evla" style="margin-top:8px">
               <label>Exit velo (mph) <input id="in-ev" type="number" value="95" step="any"></label>
               <label>Launch angle (°) <input id="in-la" type="number" value="15" step="any"></label>
@@ -294,23 +328,9 @@
               <button id="btn-simswing">Let sim swing</button>
             </div>
             <div class="hidden" id="timing-help" style="margin-top:6px">
-              <div class="muted">Center the click on the visible ball for harder contact. Timing also controls exit velocity: meet inside pitches earlier, outside pitches deeper/later. Click below the ball to lift it, above it for grounders. Early timing pulls; late timing goes opposite field. Horizontal offset also steers direction.</div>
-              <label class="muted">Pitch speed <i class="tip" tabindex="0" data-tip="How fast the pitch arrives when you swing with timing. Rookie is slow motion; Real speed is the true pitch speed. Click the visible ball or aim the green ring and press Space as it arrives. Centering and timing control exit velocity: inside pitches peak earlier, outside pitches deeper/later. Feedback is relative to that ideal contact time. Vertical offset controls launch angle; timing plus horizontal offset controls direction. Don't swing to take the pitch.">i</i> <select id="difficulty"><option value="rookie">Rookie (slow-mo)</option><option value="pro" selected>Pro</option><option value="allstar">All-Star</option><option value="real">Real speed</option></select></label>
-            </div>
-            <div class="row" style="margin-top:10px">
-              <label class="muted">Baserunning / throw decisions <i class="tip" tabindex="0" data-tip="Batting: click GO / STOP / TURN BACK by the base your runner is approaching (keys G / S / B). Fielding: pick the throw target as the fielder gets to the ball. Real-time keeps the play moving; Pause stops it for each decision. Unanswered decisions use the AI's choice.">i</i> <select id="decision"><option value="real" selected>Real-time</option><option value="pause">Pause for each decision</option></select></label>
-              <label class="muted">Camera <select id="camera-mode">
-                <option value="free">Free / User Control</option>
-                <option value="field">Field Mode / Walk Around</option>
-                <option value="action">Wide Action</option>
-                <option value="ball">Follow Ball</option>
-                <option value="runner">Hitter / Third Person</option>
-                <option value="high">Bird's-eye</option>
-                <option value="first">First-base Broadcast</option>
-                <option value="third">Third-base Broadcast</option>
-              </select> <i class="tip" tabindex="0" data-tip="Wide Action keeps the field visible while turning toward the play. Follow Ball chases behind the ball facing its travel direction, including throws. Hitter / Third Person follows close behind the hitter facing the ball. In both follow modes, drag to look around; release to ease back to the tracking angle. Scroll, pinch or use +/- to change the follow distance, as close as 3 ft, without leaving the mode. Pan (Shift/right-drag) or use the arrow controls to return to Free / User Control. Bird's-eye and broadcast views are fixed angles. Your camera mode and follow distances are remembered and also apply to replays.">i</i></label>
-              <button id="btn-field-mode" title="Field-level free camera. Up/down walk, left/right turn, drag to look. Your position is remembered.">Enter Field Mode</button>
-              <span class="muted">Umpires <i class="tip" tabindex="0" data-tip="Umpires can miss calls. When one goes against a team you control, press the glowing Challenge button within 1 s (ball/strike) or 8 s (safe/out, fair/foul) and choose what to challenge; ignore it and it fades. A failed challenge costs one (2 ABS and 1 field per team per game); overturning a bad call is free.">i</i></span>
+              <div class="muted">Timing is forgiving for contact, but increasingly early/late swings hit much weaker balls. Meet inside pitches earlier and outside pitches deeper. Click below the ball to lift it, above it for grounders. Early pulls; late goes opposite field. Power swing shrinks the contact ring and timing window, with an exponential power bonus strongest on centered, well-timed contact.</div>
+              <label style="margin:8px 0">Swing type <select id="swing-type"><option value="normal">Normal swing</option><option value="power">Power swing - smaller zone, more power</option></select></label>
+              <label class="muted">Pitch speed <i class="tip" tabindex="0" data-tip="Rookie is slow motion; Real speed is true pitch speed. Click the visible ball or aim the ring and press Space. Normal swings allow up to 125 ms early/late of the pitch-dependent ideal; power swings allow 100 ms with a smaller ring. Mistiming makes contact much weaker. Inside pitches peak earlier, outside pitches deeper. Vertical click offset controls launch angle; timing and horizontal offset control direction. Don't swing to take the pitch.">i</i> <select id="difficulty"><option value="rookie">Rookie (slow-mo)</option><option value="pro" selected>Pro</option><option value="allstar">All-Star</option><option value="real">Real speed</option></select></label>
             </div>
             <div class="banner" id="banner" style="margin-top:8px">&nbsp;</div>
           </div>
@@ -614,7 +634,7 @@
       input.step = "any";
       input.min = "0";
       input.value = obj[key];
-      if (key === "field") input.title = "FLD controls fielding errors, jump height, dive distance, move timing and recovery. Standing glove reach extends above the player's height.";
+      if (key === "field") input.title = "FLD controls reads and route corrections, fielding errors, jump height, dive distance, move timing and recovery. Moving, backhand and across-body throws take more preparation and lose strength and accuracy; higher FLD helps. Standing glove reach extends above the player's height.";
       input.addEventListener("input", () => { obj[key] = Number(input.value); updateRatings(); });
       input.addEventListener("change", () => { obj[key] = Number(input.value); saveTeams(); updateRatings(); });
       return input;
@@ -1554,8 +1574,8 @@
         clearZoneNow();
         $("banner").innerHTML = "&nbsp;";
         if (clip.foul) {
-          playFoul(event.foul, clip.rec, event, true);
-          revealTimer = setTimeout(next, (preRoll(event.pitch) + event.foul.pts[event.foul.pts.length - 1].t + 0.8) * 1000);
+          const ms = playFoul(event.foul, clip.rec, event, true);
+          revealTimer = setTimeout(next, ms);
           return;
         }
         sendScene(clip.rec.snap);
@@ -1707,10 +1727,12 @@
       const mirror = cur.preset === "custom" || cur.edited ? !!cur.mirror : ["pull", "oppo", "ofPull", "auto"].includes(cur.preset);
       return { preset: "custom", mirror, custom: Object.fromEntries(SHIFT_POS.map((pos) => {
         const base = E.defaultSpot(pos, game.park);
-        const point = E.shiftedSpot(game, pos, 1 - game.half, { ...E.currentBatter(game), bats: "R" });
+        const point = E.shiftedSpot(game, pos, 1 - game.half, { ...shiftBatter(), bats: "R" });
         return [pos, { x: point.x - base.x, y: point.y - base.y }];
       })) };
     }
+    const shiftBatter = () => game.pa ? game.pa.batter : E.currentBatter(game);
+    const shiftHand = () => E.batSide(shiftBatter(), E.currentPitcher(game));
     const PRESET_SHIFTS_KEY = "field-notes-preset-shifts-v1";
     const presetShiftGames = new WeakSet();
     let presetShifts = {};
@@ -1719,7 +1741,7 @@
       if (!stored || Array.isArray(stored) || typeof stored !== "object" || Object.entries(stored).some(([id, s]) =>
         !E.SHIFT_PRESETS[id] || id === "custom" || !s || typeof s.mirror !== "boolean" || !s.custom ||
         SHIFT_POS.some((pos) => !s.custom[pos] || !Number.isFinite(s.custom[pos].x) || !Number.isFinite(s.custom[pos].y)))) throw new Error("Invalid preset shifts");
-      presetShifts = stored;
+      presetShifts = Object.fromEntries(Object.entries(stored).map(([preset, spec]) => [preset, { ...spec, preset, edited: true }]));
     } catch (error) { console.error("Unable to load preset shifts", error); alert("Could not load saved preset shifts. Original presets will be used."); }
     function persistPresetShifts(next) {
       try { localStorage.setItem(PRESET_SHIFTS_KEY, JSON.stringify(next)); }
@@ -1733,7 +1755,8 @@
     }
     const shiftPoint = (pos, spec) => {
       const base = E.defaultSpot(pos, game.park), offset = spec.custom[pos] || { x: 0, y: 0 };
-      return { x: base.x + offset.x, y: base.y + offset.y };
+      const mirror = spec.mirror && shiftHand() === "L" ? -1 : 1;
+      return { x: base.x + offset.x * mirror, y: base.y + offset.y };
     };
     function redrawShift() {
       const spec = shiftSpec();
@@ -1757,7 +1780,9 @@
       }
       const team = 1 - game.half;
       if (shiftTeam !== team) { selectedShift = ""; shiftTeam = team; }
-      const key = `${team}|${game.over}`;
+      const batter = shiftBatter();
+      const key = [team, game.over, batter.name, shiftHand(), batter.power, batter.contact, batter.speed,
+        game.inning, game.outs, game.score.join(","), game.bases.map(Boolean).join(",")].join("|");
       if (key === shiftKey) return;
       shiftKey = key;
       const row = $("shift-row");
@@ -1770,7 +1795,7 @@
       panel.classList.toggle("hidden", false);
       {
         const saved = savedShifts.find((s) => s.id === selectedShift);
-        panel.innerHTML = `<div class="muted">Drag the seven fielders into position, or focus one and use arrow keys. Pitcher and catcher stay fixed. Changes apply from the next pitch. Diagram shows your right-handed-batter alignment.</div>
+        panel.innerHTML = `<div class="muted">Drag the seven fielders into position, or focus one and use arrow keys. Pitcher and catcher stay fixed. Changes apply from the next pitch. Diagram shows the current ${shiftHand() === "L" ? "left" : "right"}-handed batter's alignment (${esc(batter.name)}), including mirroring.</div>
           <svg id="shift-diagram" viewBox="0 0 600 490" role="group" aria-label="Custom defensive alignment">
             <path d="M300 450 L20 170 Q300 -80 580 170 Z" fill="#81ad78" stroke="#fff" stroke-width="2"/>
             <path d="M300 450 L390 360 L300 270 L210 360 Z" fill="#d8bd8d"/>
@@ -1779,7 +1804,7 @@
             <text x="300" y="393" fill="#4e5b50">P</text><text x="300" y="477" fill="#4e5b50">C</text>
             ${SHIFT_POS.map((pos) => `<g data-fielder="${pos}" tabindex="0" role="button"><circle r="16" fill="#3277a7" stroke="#fff" stroke-width="2"/><text y="4" fill="#fff">${pos}</text><title>Drag ${pos} to position</title></g>`).join("")}
           </svg>
-          <label style="margin:8px 0;flex-direction:row;align-items:center"><input type="checkbox" id="shift-mirror" ${shiftSpec().mirror ? "checked" : ""}> Mirror offsets vs lefty batters</label>
+          <label style="margin:8px 0;flex-direction:row;align-items:center"><input type="checkbox" id="shift-mirror" ${shiftSpec().mirror ? "checked" : ""}> Mirror lateral offsets vs lefty batters <i class="tip" tabindex="0" data-tip="Reverse each fielder's left/right offset from their standard position against left-handed batters. Depth and defensive positions stay unchanged. The diagram and on-field defense show the current batter's alignment. Saved shifts use a right-handed reference.">i</i></label>
           ${cur.preset !== "custom" ? `<div class="row"><b>${esc(E.SHIFT_PRESETS[cur.preset].name)}</b><button data-shift-act="save-preset">Save preset changes</button><button data-shift-act="reset-preset">Reset preset</button></div><div class="muted">Saved preset changes apply to both teams and future games in this browser. Editing Auto saves a fixed alignment instead of automatic positioning.</div>` : ""}
           <div class="row"><label>Saved shifts<select id="saved-shift"><option value="">Choose a saved shift</option>${savedShifts.map((s) => `<option value="${esc(s.id)}" ${s.id === selectedShift ? "selected" : ""}>${esc(s.name)}</option>`).join("")}</select></label>
           <label>Shift name<input id="shift-name" type="text" value="${esc(saved?.name || "")}" placeholder="e.g. Deep pull"></label>
@@ -1864,13 +1889,17 @@
 
     $("shift-row").addEventListener("change", (e) => {
       if (e.target.id !== "shift-sel") return;
-      const previous = game.shifts[1 - game.half];
-      applyShift({ preset: e.target.value, custom: previous?.custom || {}, mirror: !!previous?.mirror, ...(presetShifts[e.target.value] || {}) });
+      const preset = e.target.value;
+      const spec = preset === "custom" ? shiftSpec() : presetShifts[preset] || { custom: {}, mirror: false };
+      applyShift({ ...spec, preset });
       selectedShift = "";
       shiftKey = ""; renderShift();
     });
     $("shift-custom").addEventListener("change", (e) => {
-      if (e.target.id === "shift-mirror") editShift({ ...shiftSpec(), mirror: e.target.checked });
+      if (e.target.id === "shift-mirror") {
+        editShift({ ...shiftSpec(), mirror: e.target.checked });
+        redrawShift();
+      }
       if (e.target.id === "saved-shift") {
         selectedShift = e.target.value;
         const saved = savedShifts.find((s) => s.id === selectedShift);
@@ -1905,7 +1934,8 @@
     let shiftDrag = null;
     function moveShiftMarker(pos, x, y) {
       const base = E.defaultSpot(pos, game.park), spec = shiftSpec();
-      spec.custom[pos] = { x: x - base.x, y: y - base.y };
+      const mirror = spec.mirror && shiftHand() === "L" ? -1 : 1;
+      spec.custom[pos] = { x: (x - base.x) * mirror, y: y - base.y };
       editShift(spec);
       redrawShift();
     }
@@ -1941,7 +1971,13 @@
     const humanFlags = () => [0, 1].map((t) => controls[t] !== "sim" || pitchControls[t] !== "sim" || fieldControls[t] !== "sim");
     const callGroup = (id) => (id === "abs" ? "abs" : id === "ff" ? "ff" : "out");
     const GROUP_NAME = { abs: "Ball / strike (ABS)", out: "Safe / out", ff: "Fair / foul" };
-    let chal = null; // { calls, abs, until, secs, timer, raf, done, resolved }
+    function showCoaching(open) {
+      $("coaching-options").classList.toggle("hidden", !open);
+      $("btn-coaching").setAttribute("aria-expanded", String(open));
+    }
+    $("btn-coaching").addEventListener("click", () => showCoaching($("btn-coaching").getAttribute("aria-expanded") !== "true"));
+
+    let chal = null;
 
     function resetUmpUI() {
       if (chal) { clearTimeout(chal.timer); clearTimeout(chal.replayTimer); cancelAnimationFrame(chal.raf); }
@@ -1953,21 +1989,26 @@
       $("chal-menu").classList.remove("on");
     }
 
-    function openChallenge(review, secs, done, replayRec) {
+    function openChallenge(review, done, replayRec) {
       resetUmpUI();
-      chal = { calls: review.calls, abs: review.kind === "abs", secs, until: performance.now() + secs * 1000, done, replayRec };
+      const abs = review.kind === "abs";
+      chal = { calls: review.calls, abs, until: abs ? performance.now() + 2000 : null, done, replayRec };
       const btn = $(chal.abs ? "btn-abs" : "btn-challenge");
       if (chal.abs) showOverlay(true);
+      else showCoaching(true);
       btn.classList.add("lit");
+      btn.style.setProperty("--lit", "1");
       const tick = () => {
         if (!chal || chal.menu || chal.replaying) return;
         const left = chal.until - performance.now();
-        btn.style.setProperty("--lit", `${Math.max(0, left / (chal.secs * 1000))}`);
+        btn.style.setProperty("--lit", `${Math.max(0, left / 2000)}`);
         if (left > 0) chal.raf = requestAnimationFrame(tick);
       };
       chal.tick = tick;
-      tick();
-      chal.timer = setTimeout(() => closeChallenge(null), secs * 1000);
+      if (chal.abs) {
+        tick();
+        chal.timer = setTimeout(() => closeChallenge(null), 2000);
+      }
       refresh();
     }
 
@@ -2020,6 +2061,7 @@
     }
 
     $("btn-challenge").addEventListener("click", () => { if (chal && !chal.closing) renderChallengeMenu(); });
+    $("btn-accept-call").addEventListener("click", () => { if (chal && !chal.abs) closeChallenge(null); });
     $("btn-abs").addEventListener("click", () => { if (chal && chal.abs) fireChallenge("abs"); });
     $("chal-menu").addEventListener("click", (e) => {
       if (e.target.closest("[data-cancel]")) return closeChallenge(null);
@@ -2030,6 +2072,7 @@
     function renderChal() {
       const open = !!(chal && !chal.closing);
       $("btn-challenge").disabled = !open || chal.abs;
+      $("btn-accept-call").classList.toggle("hidden", !open || chal.abs);
       $("btn-abs").disabled = !open || !chal.abs;
       $("btn-abs").classList.toggle("hidden", !open || !chal.abs);
       $("btn-replay").disabled = !(open && chal.replayRec) && !(phase === "ready" && lastBall);
@@ -2256,7 +2299,7 @@
         };
         if (review) {
           phase = "challenge";
-          const open = () => openChallenge(review, event.held === "abs" ? 2 : 6, resume);
+          const open = () => openChallenge(review, resume);
           if (event.held === "abs") {
             const strike = /strike/.test(review.calls[0].label);
             const el = $("pitch-result");
@@ -2357,7 +2400,7 @@
         const review = E.pendingReview(game, { human: humanFlags() });
         if (!review) return finishPendingContact(true);
         phase = "challenge";
-        openChallenge(review, 6, () => finishPendingContact(true), saved);
+        openChallenge(review, () => finishPendingContact(true), saved);
       }, ms);
     }
 
@@ -2405,7 +2448,7 @@
         tracks: buildTracks(rec && rec.snap, points, spot, catchInfo || null, [], [], end + 1.5),
         lead: preRoll(rec && rec.pitch)
       });
-      return (preRoll(rec && rec.pitch) + end + 1.2) * 1000;
+      return (preRoll(rec && rec.pitch) + end + (catchInfo ? 1.5 : 1.2)) * 1000;
     }
 
     $("btn-take").addEventListener("click", () => phase === "await" && resolveManual({ swing: false }));
@@ -2431,6 +2474,7 @@
     let feedback = null;
 
     const slowmo = () => SLOWMO[$("difficulty").value] || 2.2;
+    const powerSwing = () => $("swing-type").value === "power";
 
     function startTimingPitch(pitch) {
       const duration = REAL_FLIGHT_MS * 92 / Math.max(65, pitch.mph) * slowmo();
@@ -2467,14 +2511,15 @@
           settle(out.event, out.rec);
           return;
         }
-      } else if (now > cross + 350) {
+      } else if (now > cross + Math.max(350, (E.manualSwingProfile({ power: powerSwing() }).timing
+        + E.primeContactTiming(E.currentBatter(game), E.currentPitcher(game), timing.pitch)) * timing.slow + 1)) {
         resolveManual({ swing: false });
         return;
       }
       requestAnimationFrame(timingLoop);
     }
 
-    const timingProgress = (t, now) => Math.min(1.4, Math.max(0, (now - t.start) / t.duration));
+    const timingProgress = (t, now) => Math.max(0, (now - t.start) / t.duration);
 
     function timingBallPosition(pitch, progress) {
       const p = Math.min(1, progress);
@@ -2501,15 +2546,17 @@
       const ms = (time - cross) / timing.slow;
       const swing = time < timing.start
         ? { swing: true, timing: 400, loc: 10 }
-        : { swing: true, timing: ms, loc: miss, offset: { x: dx, z: dz } };
+        : { swing: true, timing: ms, loc: miss, offset: { x: dx, z: dz }, power: powerSwing() };
       const timingError = ms - E.primeContactTiming(E.currentBatter(game), E.currentPitcher(game), pitch);
       const early = timingError < 0;
       const vertical = Math.abs(dz) < 0.5 ? "" : dz < 0 ? `${Math.abs(dz).toFixed(1)} in low` : `${dz.toFixed(1)} in high`;
       const horizontal = Math.abs(dx) < 0.5 ? "" : dx < 0 ? `${Math.abs(dx).toFixed(1)} in toward 3B side` : `${dx.toFixed(1)} in toward 1B side`;
-      const grade = Math.abs(timingError) < 8 && Math.hypot(dx, dz) < 1.5 ? "Perfect" : Math.abs(timingError) < TIMING_REF ? "Good" : "Mistimed";
+      const profile = E.manualSwingProfile(swing);
+      const quality = 1 - Math.max(Math.abs(timingError) / profile.timing, miss / profile.location);
+      const grade = quality <= 0 ? "Miss" : Math.abs(timingError) < 12 && Math.hypot(dx, dz) < 1.5 ? "Perfect" : Math.abs(timingError) < 40 ? "Good" : "Mistimed";
       const parts = [Math.abs(timingError) < 3 ? "on time" : `${Math.round(Math.abs(timingError))} ms ${early ? "early" : "late"} of ideal contact`, vertical, horizontal].filter(Boolean);
-      timing.swung = { swing, time, point, text: `${grade} — ${parts.join(" · ")}`, grade };
-      feedback = { point, ball: ballPoint, text: timing.swung.text, grade };
+      timing.swung = { swing, time, point, text: `${swing.power ? "Power · " : ""}${grade} — ${parts.join(" · ")}`, grade };
+      feedback = { point, ball: ballPoint, text: timing.swung.text, grade, power: !!swing.power };
       const t = timing;
       t.swungAt = performance.now();
       t.swungP = progress;
@@ -2533,7 +2580,7 @@
         }
       });
     }
-    const TIMING_REF = E.TIMING_WINDOW * 0.5;
+    $("swing-type").addEventListener("change", drawZone);
 
     const canvasPoint = (event) => {
       const rect = $("zone-canvas").getBoundingClientRect();
@@ -2551,6 +2598,7 @@
     });
     window.addEventListener("keydown", (event) => {
       if (event.code !== "Space") return;
+      if (/INPUT|SELECT|TEXTAREA|BUTTON|SUMMARY/.test(event.target.tagName)) return;
       if (phase === "aim" && aim && aim.meter && !event.repeat) { event.preventDefault(); return releaseMeter(); }
       if (!timing || phase !== "await") return;
       event.preventDefault();
@@ -2595,7 +2643,8 @@
       }
       ctx.globalAlpha = 1;
       if (mode_isTiming() && (timing || feedback)) {
-        const ringPx = E.LOC_WINDOW / 0.6 / 12 * ZONE_VIEW.scale;
+        const swing = timing && timing.swung ? timing.swung.swing : timing ? { power: powerSwing() } : feedback;
+        const ringPx = E.manualSwingProfile(swing).location / 0.6 / 12 * ZONE_VIEW.scale;
         const drawReticle = (point, color) => {
           const c = zoneToCanvas(point.x, point.z);
           ctx.strokeStyle = color;
@@ -2742,15 +2791,15 @@
       if (chal && phase === "challenge") {
         if (!chal.replayRec || chal.replaying) return;
         const current = chal;
-        const remaining = Math.max(0, current.until - performance.now());
+        const remaining = current.abs ? Math.max(0, current.until - performance.now()) : null;
         clearTimeout(current.timer);
         cancelAnimationFrame(current.raf);
         current.replaying = true;
         const resume = () => {
           if (chal !== current) return;
           current.replaying = false;
-          current.until = performance.now() + remaining;
-          if (!current.menu) {
+          if (current.abs) current.until = performance.now() + remaining;
+          if (current.abs && !current.menu) {
             current.timer = setTimeout(() => closeChallenge(null), remaining);
             current.raf = requestAnimationFrame(current.tick);
           }
@@ -2844,7 +2893,10 @@
           if (to <= entry.start) continue;
           // On a fly ball, runners tag up and leave only after the catch (or the drop).
           const tagDelay = play.air && entry.start > 0 && play.time ? play.time + 0.3 : null;
-          runners.push({ name: entry.r && entry.r.p ? E.shortName(entry.r.p.name) : "", height: entry.r?.p ? E.playerHeight(entry.r.p) : 72, weight: entry.r?.p ? E.playerWeight(entry.r.p) : 200, from: entry.start, to: Math.min(to, 4), out: entry.out, delay: entry.start === 0 ? 0.15 : tagDelay != null ? tagDelay : 0.35, perBase: entry.start === 0 ? 3.6 : 3.1 });
+          const perBase = E.runningSegment(entry.r.p);
+          const ramp0 = entry.start === 0 ? 0.15 : play.air ? 0.2 : 0.45;
+          runners.push({ name: E.shortName(entry.r.p.name), height: E.playerHeight(entry.r.p), weight: E.playerWeight(entry.r.p), from: entry.start, to: Math.min(to, 4), out: entry.out, delay: entry.start === 0 ? 0.12 : tagDelay != null ? tagDelay : 0, perBase,
+            run: { start: ramp0, ramp: E.RUN_RAMP }, duration: E.runTime((Math.min(to, 4) - entry.start) * 90, 90 / perBase, ramp0) });
         }
       }
       sendScene(snap);
@@ -2858,11 +2910,13 @@
       }
       const throwList = fielded ? (play.throws || []).map((th) => ({ from: th.from, to: th.to, release: th.release, arrive: th.arrive, receiver: th.receiver })) : [];
       const tFlightEnd = points.length ? points[points.length - 1].t : 3;
-      const tRunEnd = runners.reduce((m, r) => Math.max(m, r.delay + r.perBase * (r.to - r.from)), 0);
+      const tRunEnd = runners.reduce((m, r) => Math.max(m, r.delay + r.duration), 0);
+      const lastPossession = Math.max(tFlightEnd, ...throwList.map((th) => th.arrive));
+      const playEnd = Math.max(tRunEnd, lastPossession + (fielded ? 1.5 : 0));
       const tracks = buildTracks(snap, points, ball.landing ? { x: ball.landing.x, y: ball.landing.y } : undefined,
         primary,
-        throwList, runners.map((r) => ({ from: r.from, to: r.to, delay: r.delay, perBase: r.perBase })),
-        Math.max(tFlightEnd, tRunEnd, ...throwList.map((th) => th.arrive)) + 2.4);
+        throwList, runners,
+        playEnd + 0.1);
       // On a fielded ground ball, hold the result until the batter's fate is settled.
       let revealAt = null;
       if (fielded && !play.air) {
@@ -2883,10 +2937,9 @@
         lead: preRoll(pitch)
       });
       if (!isReplay) $("banner").innerHTML = "&nbsp;";
-      if (isReplay) sceneTimer = setTimeout(() => { if (phase === "ready") sendScene(); }, 9000);
-      const flightEnd = points.length ? points[points.length - 1].t : 3;
-      const runEnd = runners.reduce((m, r) => Math.max(m, r.delay + r.perBase * (r.to - r.from)), 0);
-      return (preRoll(pitch) + Math.max(flightEnd, runEnd) + 1) * 1000;
+      const duration = (preRoll(pitch) + playEnd + 0.1) * 1000;
+      if (isReplay) sceneTimer = setTimeout(() => { if (phase === "ready") sendScene(); }, duration);
+      return duration;
     }
 
     // Seconds from release to the plate for the pre-roll shown before contact.
@@ -2967,7 +3020,7 @@
       const last = { ...liveFrame(run.extra, run), done: true };
       run.frames.push(last);
       post({ type: "gm-frame", frame: last });
-      openChallenge(review, 6, () => concludeLive(run, opts), {
+      openChallenge(review, () => concludeLive(run, opts), {
         frames: run.frames, snap: run.rec.snap, pitch: run.rec.pitch, extra: run.extra
       });
     }
