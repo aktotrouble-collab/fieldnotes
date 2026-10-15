@@ -3285,7 +3285,7 @@
       function chaseCoordinates(point) {
         const { eye } = chaseCamera;
         const yaw = chaseCamera.yaw + chaseLook.yaw;
-        const pitch = Math.max(-1.45, Math.min(1.45, chaseCamera.pitch + chaseLook.pitch));
+        const pitch = Math.max(-1.56, Math.min(1.56, chaseCamera.pitch + chaseLook.pitch));
         const x = point.x - eye.x, y = point.y - eye.y, z = (point.z || 0) - eye.z;
         const forward = x * Math.sin(yaw) + y * Math.cos(yaw);
         return {
@@ -4360,7 +4360,7 @@
         const focal = Math.min(width, height) * 0.8;
         const { eye } = chaseCamera;
         const yaw = chaseCamera.yaw + chaseLook.yaw;
-        const pitch = Math.max(-1.45, Math.min(1.45, chaseCamera.pitch + chaseLook.pitch));
+        const pitch = Math.max(-1.56, Math.min(1.56, chaseCamera.pitch + chaseLook.pitch));
         const sourceAt = (x, y) => {
           const up = (height * 0.44 - y) / focal;
           const vertical = Math.sin(pitch) + up * Math.cos(pitch);

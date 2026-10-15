@@ -11,6 +11,8 @@ let now = 1000;
 const context = vm.createContext({
   performance: { now: () => now },
   localStorage: { setItem: (key, value) => { stored[key] = value; } },
+  requestAnimationFrame: () => 1,
+  cancelAnimationFrame: () => {},
   window: { parent: { postMessage: (message) => messages.push(message) } }
 });
 vm.runInContext(`
@@ -19,6 +21,7 @@ vm.runInContext(`
   let freeCamera = { ...camera };
   let gameCameraMode = "free", cameraUpdatedAt = 0, cameraRunner = null;
   let chaseCamera = null;
+  const chaseLook = {yaw:0,pitch:0,held:false,updatedAt:0,raf:0};
   const MAX_ELEVATION = 1.55;
   const chaseDistances = {runner:12,ball:18};
   ${source}
@@ -88,6 +91,22 @@ for (const ball of [{x:-100,y:-80,z:3},{x:0,y:0,z:100},{x:100,y:50,z:0}]) {
 }
 run('zoomFollowCamera(0.001)');
 assert.equal(run('chaseDistances.runner'), 180);
+for (const mode of ['runner','ball']) {
+  update(mode);
+  assert.equal(run('beginChaseLook()'), true);
+  run('chaseLook.yaw = 0.8; chaseLook.pitch = 0.2;');
+  update(mode,60);
+  assert.equal(run('chaseLook.yaw'),0.8,'Held look must not drift back');
+  assert.equal(run('gameCameraMode'),mode,'Looking around preserves follow mode');
+  const distance = run(`chaseDistances.${mode}`);
+  run('endChaseLook()');
+  update(mode,30);
+  assert(run('chaseLook.yaw > 0.2 && chaseLook.yaw < 0.6'),'Release gradually returns, not snaps');
+  update(mode,300);
+  assert.equal(run('chaseLook.yaw'),0,'Released look eventually returns exactly to tracking');
+  assert.equal(run('chaseLook.pitch'),0);
+  assert.equal(run(`chaseDistances.${mode}`),distance,'Looking around does not change zoom');
+}
 run('gameState.live.frame.ball = {x:220,y:300,z:90};');
 update('ball');
 run('gameState.live.frame.t += 0.1;gameState.live.frame.ball = {x:230,y:310,z:95};');
