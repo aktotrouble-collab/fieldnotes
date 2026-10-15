@@ -371,9 +371,9 @@
     let vx = ux0 * speed0 * Math.cos(radians);
     let vy = uy0 * speed0 * Math.cos(radians);
     let vz = speed0 * Math.sin(radians);
-    let x = 0;
-    let y = 0;
-    let z = BALL.startHeight;
+    let x = opts.origin ? opts.origin.x : 0;
+    let y = opts.origin ? opts.origin.y : 0;
+    let z = opts.origin && opts.origin.z !== undefined ? opts.origin.z : BALL.startHeight;
     let t = 0;
     let rolling = false;
     const angleOf = (px, py) => Math.atan2(px, py) * 180 / Math.PI;
@@ -385,6 +385,7 @@
     let hr = false;
     let pole = false;
     let grd = false;
+    let escaped = false;
     let landing = null;
     let pending = false;
     const baseDepth = (px) => 90 * Math.cos(foulLimit(park, px) * Math.PI / 180);
@@ -421,7 +422,7 @@
       const here = angleOf(nx, ny);
       const boundary = opts.noFence || past ? null : boundaryHit(park, here);
       let reach = opts.noFence || past ? Infinity : boundary ? boundary.feet : boundaryAt(park, here);
-      if (!past && !opts.noFence && firstLand < 0 && !rolling && (opts.foulOver ?? settings.foulOver)) {
+      if (!opts.thrown && !past && !opts.noFence && firstLand < 0 && !rolling && (opts.foulOver ?? settings.foulOver)) {
         const lim = foulLimit(park, here);
         const wallDist = reach;
         const miss = wallDist * Math.abs(Math.abs(here) - lim) * Math.PI / 180;
@@ -440,6 +441,11 @@
         wallHeight = crossing ? crossing.height : boundary ? boundary.height : crossFair || Math.abs(here) <= limit + 1 ? wallAt(park, here) : 8;
         const crossZ = rolling ? 0 : crossing ? z + (nz - z) * crossing.feet : Math.max(z, nz);
         const poleMiss = fence * Math.abs(Math.abs(crossAngle) - limit) * Math.PI / 180;
+        if (opts.thrown && crossZ > wallHeight) {
+          escaped = true;
+          pts.push({ t, x: nx, y: ny, z: nz });
+          break;
+        }
         if (crossZ > wallHeight && firstLand < 0) {
           landAngle = crossAngle;
           if (crossFair || poleMiss <= FOUL_POLE_REACH) {
@@ -537,7 +543,32 @@
       fair = last.y > 0 && Math.abs(landAngle) <= foulLimit(park, landAngle);
     }
     if (!isFinite(fence)) fence = fenceAt(park, landAngle);
-    return { pts, firstLand, landing, wallHit, hr, pole, grd, fair, dir, landAngle, ev, la, fence, wallHeight };
+    const result = { pts, firstLand, landing, wallHit, hr, pole, grd, escaped, fair, dir, landAngle, ev, la, fence, wallHeight };
+    if (!opts.thrown) result.lineCall = foulLineCall(result, park, fair);
+    return result;
+  }
+
+  function foulLineCall(ball, park, ruledFair) {
+    const landing = ball.pts[ball.firstLand];
+    if (!landing || ball.hr || (ball.wallHit >= 0 && ball.wallHit < ball.firstLand)) return null;
+    const depth = point => 90 * Math.cos(foulLimit(park, point.x) * Math.PI / 180);
+    let point = landing;
+    if (landing.y < depth(landing)) {
+      let crossing = null;
+      for (let i = ball.firstLand + 1; i < ball.pts.length; i++) {
+        const a = ball.pts[i - 1], b = ball.pts[i];
+        const da = a.y - depth(a), db = b.y - depth(b);
+        if (da < 0 && db >= 0) {
+          const u = -da / (db - da);
+          crossing = { t: a.t + (b.t - a.t) * u, x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
+          break;
+        }
+      }
+      point = crossing || ball.pts[ball.pts.length - 1];
+    }
+    const angle = foulLimit(park, point.x) * Math.PI / 180;
+    const distance = Math.abs(Math.abs(point.x) * Math.cos(angle) - point.y * Math.sin(angle));
+    return point.y > 0 && distance <= 3 + 1e-9 ? { t: point.t, x: point.x, y: point.y, label: ruledFair ? 'FAIR!' : 'FOUL!' } : null;
   }
 
   /* --------------------------------------------------------------- fielding */
@@ -575,7 +606,7 @@
     return {
       speed: vmax * 0.78,
       vmax,
-      react: 0.38 + 0.2 * (1 - tracking),
+      react: 0.34 + 0.16 * (1 - tracking),
       tracking,
       reach: motion.ARM_REACH,
       height: playerHeight(player),
@@ -614,6 +645,7 @@
   const BACKUP_PREF = { 1: ['RF', 'P'], 2: ['CF', 'RF', 'LF'], 3: ['P', 'LF'], 4: ['P'] };
   const BACKUP_POOL = new Set(['LF', 'CF', 'RF', 'P']);
   const CUTOFF_POOL = new Set(['1B', '2B', '3B', 'SS']);
+  const CATCH_PRIORITY = ['CF', 'LF', 'RF', 'SS', '2B', '3B', '1B', 'C', 'P'];
 
   // Where every fielder who isn't handling the ball should be: covering the bags runners are heading to,
   // lined up as cutoff and trailer on long throws, backing up bases and the fielder, or ready near their spot.
@@ -647,13 +679,15 @@
     const ballR = Math.hypot(ball.x, ball.y);
     const outfield = ballR > 150;
     const lead = c.lead || 0;
-    const bases = [...new Set(c.bases)].sort((a, b) => (b === lead) - (a === lead) || b - a);
+    const bases = [...new Set([...c.bases, ...(outfield ? [2, 3, 4, 1] : [])])]
+      .sort((a, b) => (b === lead) - (a === lead) || b - a);
     const unit = (from, to) => {
       const d = Math.hypot(to.x - from.x, to.y - from.y) || 1;
       return { x: (to.x - from.x) / d, y: (to.y - from.y) / d, d };
     };
 
     for (const base of bases) {
+      if (c.coveredBases && c.coveredBases.includes(base)) continue;
       const f = pick(INFIELD, baseXY(base), COVER_PREF[base]);
       if (f) put(f, { ...baseXY(base), base }, 'cover');
     }
@@ -733,7 +767,7 @@
     throws.forEach((th, i) => {
       if (!th.receiver || !by(th.receiver)) return;
       const ts = i === 0 ? pickT : throws[i - 1].arrive;
-      add(th.receiver, { ts, te: Math.max(ts + 0.3, th.arrive - 0.2), tgt: { x: th.to.x, y: th.to.y }, until: throws[i + 1] ? throws[i + 1].release : Infinity });
+      add(th.receiver, { ts, te: Math.max(ts + 0.3, th.arrive - 0.2), tgt: { x: th.to.x, y: th.to.y }, base: th.base, until: throws[i + 1] ? throws[i + 1].release : Infinity });
     });
     const started = new Map();
     const ballAt = (t) => {
@@ -745,6 +779,7 @@
       let at = rest;
       for (const th of throws) {
         if (t >= th.release && t <= th.arrive) {
+          if (th.points && th.points.length) return trajectoryPoint(th.points, t - th.release);
           const u = (t - th.release) / Math.max(0.05, th.arrive - th.release);
           return { x: th.from.x + (th.to.x - th.from.x) * u, y: th.from.y + (th.to.y - th.from.y) * u };
         }
@@ -767,7 +802,10 @@
         const per = r.perBase || 3.3;
         const elapsed = t - (r.delay || 0);
         const prog = r.run ? runDistance(elapsed, 90 / per, r.run.start) / 90 : elapsed / per;
-        if (prog >= r.to - r.from || r.from >= r.to) continue;
+        if (prog >= r.to - r.from || r.from >= r.to) {
+          if (!r.out && r.to < 4) bases.push(r.to + 1);
+          continue;
+        }
         const next = r.from + Math.max(0, Math.floor(prog)) + 1;
         if (next <= Math.min(4, r.to)) bases.push(next);
       }
@@ -802,7 +840,9 @@
         const holder = holderAt(t);
         dests = supportPlan({
           park: c.park, fielders: st, free, ball: ballAt(t), thrower: holder,
-          bases, lead: bases.length ? Math.max(...bases) : 0
+          bases, lead: bases.length ? Math.max(...bases) : 0,
+          coveredBases: st.filter(s => !free.has(s.pos)).flatMap(s => (windows[s.pos] || [])
+            .filter(w => t > w.ts && t <= w.until && w.base).map(w => w.base))
         });
       }
       for (const s of st) {
@@ -844,12 +884,127 @@
       + throwMotion(fielder, target).prepare;
   };
 
-  function throwSecs(fielder, distance, target) {
-    return transferSecs(fielder, target) + distance / (fielder.fp.armFps * throwMotion(fielder, target).arm) + (distance > 200 ? 0.45 : 0);
+  function throwSpread(fielder, distance, target) {
+    return distance * Math.tan(throwAim(fielder, target) * Math.PI / 180);
   }
 
-  function throwSpread(fielder, distance, target) {
-    return Math.max(0.3, distance * 0.024 * clamp(1.5 - fielder.p.arm / 100, 0.7, 1.3)) * throwMotion(fielder, target).spread;
+  function throwAim(fielder, target) {
+    const arm = Math.max(0, fielder.p.arm === undefined ? 50 : fielder.p.arm);
+    return (0.3 + 3.5 * Math.exp(-arm / 60)) * throwMotion(fielder, target).spread;
+  }
+
+  function trajectoryPoint(points, time) {
+    let low = 0, high = points.length - 1;
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      if (points[mid].t <= time) low = mid;
+      else high = mid - 1;
+    }
+    const a = points[low], b = points[Math.min(low + 1, points.length - 1)];
+    const u = clamp((time - a.t) / Math.max(1e-9, b.t - a.t), 0, 1);
+    return { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u, z: a.z + (b.z - a.z) * u };
+  }
+
+  const throwPlans = new Map();
+  function throwPlan(speed, distance) {
+    if (distance <= 0) return { angle: 0, duration: 0, bounced: false };
+    const key = `${speed.toFixed(1)}:${distance.toFixed(0)}`;
+    if (throwPlans.has(key)) return throwPlans.get(key);
+    const park = parkById('dodgers');
+    const fly = angle => flightSim(speed / FPS, angle, 0, park,
+      { noFence: true, thrown: true, origin: { x: 0, y: 0, z: 5 }, spin: { b: 0, s: 0 } });
+    const arrival = flight => {
+      const index = flight.pts.findIndex(p => p.y >= distance);
+      if (index < 1) return null;
+      const a = flight.pts[index - 1], b = flight.pts[index];
+      const u = (distance - a.y) / (b.y - a.y);
+      return { t: a.t + (b.t - a.t) * u, z: a.z + (b.z - a.z) * u, bounced: index >= flight.firstLand };
+    };
+    // Find the low, on-the-fly solution at a fixed release speed. If unreachable, use the quickest skip.
+    let low = -5, high = 40, best = null;
+    for (let i = 0; i < 12; i++) {
+      const angle = (low + high) / 2, at = arrival(fly(angle));
+      if (at && !at.bounced && at.z >= 4) {
+        high = angle; best = { angle, duration: at.t, bounced: false };
+      } else low = angle;
+    }
+    if (!best) {
+      let farthest = -Infinity, fallback;
+      for (let angle = 5; angle <= 40; angle += 5) {
+        const flight = fly(angle), at = arrival(flight);
+        const last = flight.pts[flight.pts.length - 1];
+        if (at && (!best || at.t < best.duration)) best = { angle, duration: at.t, bounced: true };
+        if (last.y > farthest) {
+          farthest = last.y;
+          fallback = { angle, duration: last.t + Math.max(0, distance - last.y) / 20 + 0.4, bounced: true };
+        }
+      }
+      if (!best) best = fallback;
+    }
+    if (throwPlans.size >= 2048) throwPlans.clear();
+    throwPlans.set(key, best);
+    return best;
+  }
+
+  function throwFlight(fielder, target, park, rng, env = {}) {
+    const speed = fielder.fp.armFps * throwMotion(fielder, target).arm;
+    const distance = Math.hypot(target.x - fielder.x, target.y - fielder.y);
+    const plan = throwPlan(speed, distance);
+    const arm = Math.max(0, fielder.p.arm === undefined ? 50 : fielder.p.arm);
+    const perfect = rng ? rng.chance(0.01 + 0.07 * (arm / (arm + 50)) ** 2) : true;
+    const sd = throwAim(fielder, target);
+    const directionError = perfect ? 0 : rng.gauss() * sd;
+    const angleError = perfect ? 0 : rng.gauss() * sd * 0.65;
+    const dir = Math.atan2(target.x - fielder.x, target.y - fielder.y) * 180 / Math.PI + directionError;
+    const flight = flightSim(speed / FPS, plan.angle + angleError, dir, park, {
+      ...env, thrown: true, origin: { x: fielder.x, y: fielder.y, z: 5 }, spin: { b: 0, s: 0 }
+    });
+    return { ...flight, speed, directionError, angleError, perfect, target: { ...target }, duration: plan.duration };
+  }
+
+  function cutoffPlan(h, target, fielders, excluded) {
+    const distance = Math.hypot(h.x - target.x, h.y - target.y);
+    if (distance < 140) return null;
+    const direct = flightSecs(h, distance, target);
+    let best = null;
+    for (const f of fielders) {
+      if (f === h || f === excluded || !INFIELD.has(f.pos) || f.pos === 'C' || f.pos === 'P') continue;
+      const ux = (h.x - target.x) / distance, uy = (h.y - target.y) / distance;
+      const along = clamp((f.x - target.x) * ux + (f.y - target.y) * uy, distance * 0.25, distance * 0.75);
+      const mid = { x: target.x + ux * along, y: target.y + uy * along };
+      const relayFielder = { ...f, ...mid, pickup: null, recovery: 0 };
+      const first = flightSecs(h, Math.hypot(h.x - mid.x, h.y - mid.y), mid);
+      const ready = Math.hypot(f.x - mid.x, f.y - mid.y) / f.fp.speed;
+      if (ready > first + 0.15) continue;
+      const via = first + transferSecs(relayFielder, target)
+        + flightSecs(relayFielder, Math.hypot(mid.x - target.x, mid.y - target.y), target);
+      if (!best || via < best.via) best = { man: f, mid, via, saves: direct - via };
+    }
+    return best;
+  }
+
+  function resolvedThrow(g, h, target, base, release, receiver, wind) {
+    const flight = throwFlight(h, target, g.park, g.rng, { wind, rho: g.env ? g.env.rho : 1 });
+    const pose = motion.pose(null, 0, receiver.fp.height);
+    let catchPoint = null;
+    for (const p of flight.pts) {
+      const travel = receiver.fp.speed * Math.max(0, p.t - Math.max(0.15, flight.duration - 0.5));
+      const distance = Math.hypot(p.x - target.x, p.y - target.y);
+      if (p.t > 0.05 && motion.canReach(pose, Math.max(0, distance - travel), 0, p.z)) {
+        catchPoint = p;
+        break;
+      }
+    }
+    const point = catchPoint || flight.pts[flight.pts.length - 1];
+    const miss = Math.hypot(point.x - target.x, point.y - target.y);
+    const recover = catchPoint ? 0 : miss / receiver.fp.speed + 0.35;
+    const arrive = release + point.t + recover;
+    return {
+      from: { x: h.x, y: h.y }, to: { x: point.x, y: point.y }, base, release, arrive,
+      ready: arrive + miss / receiver.fp.speed, receiver: receiver.pos, thrower: h.pos, wild: miss > 16 || flight.escaped, escaped: flight.escaped,
+      points: flight.pts.filter(p => p.t <= point.t),
+      speed: flight.speed, directionError: flight.directionError, angleError: flight.angleError
+    };
   }
 
   function observedBall(ball, index, fp) {
@@ -887,7 +1042,7 @@
     const wz = (vx * ay - vy * ax) / cube;
     let t = 0;
     while (t < seconds && z > 0) {
-      const dt = Math.min(1 / 30, seconds - t), v = Math.hypot(vx, vy, vz);
+      const dt = Math.min(1 / 60, seconds - t), v = Math.hypot(vx, vy, vz);
       const nx = vx + v * (-drag * vx + wy * vz - wz * vy) * dt;
       const ny = vy + v * (-drag * vy + wz * vx - wx * vz) * dt;
       const nz = vz + (-BALL.g + v * (-drag * vz + wx * vy - wy * vx)) * dt;
@@ -899,7 +1054,25 @@
     return { x, y, z };
   }
 
-  function readTarget(read, fielder, time) {
+  function trackingWallPressure(fielder, target, park) {
+    if (!park) return 0;
+    const clearance = point => {
+      const radius = Math.hypot(point.x, point.y);
+      if (!radius) return Infinity;
+      const angle = Math.atan2(point.x, point.y) * 180 / Math.PI;
+      const wall = boundaryHit(park, angle);
+      return wall ? (wall.feet - radius) * Math.abs((wall.nx * point.x + wall.ny * point.y) / radius)
+        : boundaryAt(park, angle) - radius;
+    };
+    // Use only the observed projection and the fielder's position, not the actual future wall hit.
+    return clamp(1 - Math.min(clearance(fielder), clearance(target)) / 30, 0, 1);
+  }
+
+  function trackingReadInterval(skill, wallPressure) {
+    return 0.05 + (1 - skill) * 0.08 + wallPressure * (0.02 + (1 - skill) * 0.06);
+  }
+
+  function readTarget(read, fielder, time, park) {
     const distance = Math.hypot(read.x - fielder.x, read.y - fielder.y);
     const horizontalSpeed2 = read.vx * read.vx + read.vy * read.vy;
     const approach = horizontalSpeed2 > 1
@@ -908,19 +1081,22 @@
     const horizon = clamp(approach, 0.08, 2.5);
     const lead = horizon + read.age;
     const drift = (1 - Math.exp(-0.12 * lead)) / 0.12;
-    const uncertainty = (1 - read.skill) ** 2 * Math.min(12, distance * 0.06) / (1 + time * 0.8);
     const target = airborne ? projectRead(read) : { x: read.x + read.vx * drift, y: read.y + read.vy * drift };
+    const wallPressure = trackingWallPressure(fielder, target, park);
+    const uncertainty = (0.3 + wallPressure * 0.7) * (1 - read.skill) ** 2
+      * Math.min(12, distance * 0.06) / (1 + time * 0.8);
     if (airborne) {
       const falling = (read.vz + Math.sqrt(read.vz * read.vz + 2 * BALL.g * Math.max(0, read.z))) / BALL.g;
       const coarseDrift = (1 - Math.exp(-0.12 * (Math.min(3, falling) + read.age))) / 0.12;
       // Weaker readers lean on coarse extrapolation longer before trusting the observed curve.
-      const doubt = 0.4 * (1 - read.skill) / (1 + time * 0.3);
+      const doubt = (0.08 + wallPressure * 0.32) * (1 - read.skill) / (1 + time * 0.3);
       target.x += (read.x + read.vx * coarseDrift - target.x) * doubt;
       target.y += (read.y + read.vy * coarseDrift - target.y) * doubt;
     }
     return {
       x: target.x + Math.sin(time * 2.1) * uncertainty,
-      y: target.y + Math.cos(time * 1.7) * uncertainty
+      y: target.y + Math.cos(time * 1.7) * uncertainty,
+      wallPressure
     };
   }
 
@@ -935,8 +1111,8 @@
         const dt = time - ball.pts[index - 1].t;
         if (time >= nextRead) {
           const read = observedBall(ball, index, f.fp);
-          f.target = readTarget(read, f, time);
-          nextRead = time + 0.07 + (1 - read.skill) * 0.14;
+          f.target = readTarget(read, f, time, park);
+          nextRead = time + trackingReadInterval(read.skill, f.target.wallPressure);
         }
         if (time >= f.fp.react) {
           const dx = f.target.x - f.x, dy = f.target.y - f.y, distance = Math.hypot(dx, dy);
@@ -998,7 +1174,7 @@
     const pts = ball.pts;
     const routes = Number.isFinite(ball.ev) ? readFieldingRoutes(ball, fielders, opts.park) : null;
     const last = opts.airOnly ? Math.min(ball.firstLand - 1, ball.wallHit < 0 ? pts.length - 1 : ball.wallHit - 1) : pts.length - 1;
-    function intercept(standingOnly, limit = last) {
+    function intercept(standingOnly, limit = last, calledFielder = null) {
       for (let index = 1; index <= limit; index += 1) {
         const point = pts[index];
         if (opts.region && !opts.region(point)) continue;
@@ -1006,6 +1182,7 @@
         let bestNeed = Infinity;
         let bestPlan = null;
         for (const fielder of fielders) {
+          if (calledFielder && fielder !== calledFielder) continue;
           const at = routes && routes[fielder.pos][index];
           let plan;
           if (at) {
@@ -1027,6 +1204,11 @@
               }
             }
           } else plan = fieldingPlan(fielder, point, standingOnly);
+          if (plan && calledFielder) {
+            const margin = point.t - fielder.fp.react
+              - fieldTime(fielder.fp, Math.max(0, Math.hypot(plan.body.x - fielder.x, plan.body.y - fielder.y) - fielder.fp.reach));
+            if (plan.move || margin < 0.3 || (!INFIELD.has(fielder.pos) && Math.hypot(point.x, point.y) < 140)) plan = null;
+          }
           if (plan && plan.need < bestNeed) {
             bestNeed = plan.need;
             best = fielder;
@@ -1065,7 +1247,43 @@
       }
       standing = { f: best, index: pts.length - 1, t: Math.max(bestNeed, rest.t), x: rest.x, y: rest.y, z: 0, air: false, body: { x: rest.x, y: rest.y }, move: null, routes };
     }
-    if (standing && standing.air) return standing;
+    if (standing && standing.air) {
+      const airLast = Math.min(last, ball.firstLand - 1, ball.wallHit < 0 ? last : ball.wallHit - 1);
+      const candidates = [standing];
+      for (const pos of CATCH_PRIORITY) {
+        if (pos === standing.f.pos) continue;
+        const fielder = fielders.find(f => f.pos === pos);
+        if (!fielder) continue;
+        const called = intercept(true, airLast, fielder);
+        if (called) candidates.push(called);
+      }
+      const claims = candidates.map(candidate => {
+        const route = routes && routes[candidate.f.pos];
+        let settledAt = null;
+        if (route) {
+          for (let index = 1; index <= candidate.index; index++) {
+            const at = route[index];
+            const read = observedBall(ball, index, candidate.f.fp);
+            const target = readTarget(read, { ...candidate.f, x: at[1], y: at[2] }, at[0], opts.park);
+            const settled = Math.hypot(at[3], at[4]) <= 6
+              && Math.hypot(target.x - at[1], target.y - at[2]) <= 6;
+            settledAt = settled ? (settledAt === null ? at[0] : settledAt) : null;
+          }
+        } else if (Math.hypot(candidate.body.x - candidate.f.x, candidate.body.y - candidate.f.y) <= 6) {
+          settledAt = candidate.f.fp.react;
+        }
+        return { candidate, at: settledAt !== null && candidate.t - settledAt >= 0.45 ? settledAt : Infinity };
+      }).sort((a, b) => a.at - b.at);
+      // A clear, settled caller owns the catch; positional priority only resolves overlapping claims.
+      if (Number.isFinite(claims[0].at) && (claims.length === 1 || claims[1].at - claims[0].at > 0.2)) {
+        return claims[0].candidate;
+      }
+      for (const pos of CATCH_PRIORITY) {
+        const candidate = candidates.find(c => c.f.pos === pos);
+        if (candidate) return candidate;
+      }
+      return standing;
+    }
     const active = intercept(false, standing ? standing.index : last);
     // Leave the ground only to save a catch or beat an upright pickup after recovery.
     if (active && (!standing || active.air || (active.move ? active.move.end : active.t) < standing.t)) return active;
@@ -1274,7 +1492,6 @@
   const seg = (player) => 3.3 - 0.012 * (player.speed - 50);
   const toFirst = (player) => 0.12 + runTime(90, 90 / seg(player), 0.15);
   const fieldingErrorP = (fielder, air) => 0.012 * Math.max(0.1, 1 + (50 - fielder.p.field) / 40) * (air ? 0.35 : 1);
-  const throwingErrorP = (fielder) => 0.008 * Math.max(0.1, 1 + (50 - fielder.p.field) / 45);
 
   /* ---------------------------------------------------------------- game core */
 
@@ -1907,9 +2124,49 @@
     result.time = fr.t;
     result.air = fr.air;
     result.fielding = { body: fr.body, move: fr.move, z: fr.z, route: fr.routes && fr.routes[F.pos] };
-    const spot = result.spot;
-    const dist = (base) => Math.hypot(spot.x - baseXY(base).x, spot.y - baseXY(base).y);
     const outsBefore = g.outs;
+    const plannedThrows = new Map();
+    function plannedThrow(base) {
+      if (plannedThrows.has(base)) return plannedThrows.get(base);
+      const target = baseXY(base);
+      const receiver = fielders.find(f => f.pos === receiverFor(base, F.pos)) || F;
+      const cut = !INFIELD.has(F.pos) ? cutoffPlan(F, target, fielders, receiver) : null;
+      const useCut = cut && cut.saves > 0.12;
+      const aim = useCut ? cut.mid : target;
+      const first = resolvedThrow(g, F, aim, base, transferSecs(F, aim), useCut ? cut.man : receiver, ball.wind);
+      const legs = [first];
+      if (useCut && !first.escaped) {
+        const relay = { ...cut.man, ...first.to, pickup: null, recovery: 0 };
+        legs.push(resolvedThrow(g, relay, target, base, first.arrive + transferSecs(relay, target), receiver, ball.wind));
+      }
+      const result = { legs, ready: legs[legs.length - 1].ready, wild: legs.some(leg => leg.wild) };
+      plannedThrows.set(base, result);
+      return result;
+    }
+    const recordThrow = (base, time) => {
+      for (const leg of plannedThrow(base).legs) result.throws.push({ ...leg, release: time + leg.release, arrive: time + leg.arrive });
+      const escaped = result.throws.find(leg => leg.escaped);
+      if (escaped) {
+        const occupied = new Map(entries.map(entry => {
+          let at = entry.start;
+          while (at < 4) {
+            const need = result.airOut ? fr.t + 0.15 + runTime((at + 1 - entry.start) * 90, 90 / seg(entry.r.p), 0.2)
+              : entry.isBatter ? toFirst(entry.r.p) + at * (seg(entry.r.p) - 0.1)
+              : (ball.la >= 10 && outsBefore < 2 ? 0.4 : 0) + runTime((at + 1 - entry.start) * 90, 90 / seg(entry.r.p), 0.45);
+            if (need > escaped.release) break;
+            at++;
+          }
+          return [entry, at];
+        }));
+        const fromPitch = INFIELD.has(F.pos) && result.throws[0] === escaped
+          && !entries.every(entry => occupied.get(entry) > entry.start);
+        for (const entry of entries) if (!entry.out) {
+          entry.base = Math.min(4, Math.max(occupied.get(entry), (fromPitch ? entry.start : occupied.get(entry)) + 2));
+        }
+        result.error = escaped.thrower;
+        result.throwOutOfPlay = true;
+      }
+    };
 
     /* caught in the air */
     if (fr.air && !rng.chance(fieldingErrorP(F, true))) {
@@ -1925,7 +2182,7 @@
           if (base + 1 <= ceiling) {
             const target = base + 1;
             const need = 0.15 + runTime(90, 90 / seg(entry.r.p), 0.2);
-            const arrive = fr.t + throwSecs(F, dist(target), baseXY(target));
+            const arrive = fr.t + plannedThrow(target).ready;
             if (arrive - (fr.t + need) > 0.35 && (isOF || fr.t > 3)) {
               if (arrive + rng.gauss() * 0.15 > fr.t + need + rng.gauss() * 0.1) base = target;
               else {
@@ -1945,11 +2202,7 @@
       }
       result.sacFly = entries.some((entry) => !entry.isBatter && !entry.out && entry.base === 4) && outsBefore < 2;
       if (result.tagTarget) {
-        result.throws.push({
-          from: { x: spot.x, y: spot.y }, to: baseXY(result.tagTarget), base: result.tagTarget,
-          release: fr.t + transferSecs(F, baseXY(result.tagTarget)), arrive: fr.t + throwSecs(F, dist(result.tagTarget), baseXY(result.tagTarget)),
-          receiver: receiverFor(result.tagTarget, F.pos)
-        });
+        recordThrow(result.tagTarget, fr.t);
       }
       return result;
     }
@@ -1967,13 +2220,7 @@
     const arrive = (entry, base) => entry.start === 0
       ? toFirst(entry.r.p) + (base - 1) * (seg(entry.r.p) - 0.1)
       : startDelay + runTime((base - entry.start) * 90, 90 / seg(entry.r.p), 0.45);
-    // A throw that misses the bag costs the receiver time to reach it; longer throws from weaker arms miss more.
-    const missDelay = (fielder, feet, target) => {
-      const sd = throwSpread(fielder, feet, target);
-      const miss = Math.hypot(rng.gauss() * sd, rng.gauss() * sd);
-      return miss > 2.5 ? miss / 20 : 0;
-    };
-    const throwAt = (base, time) => time + throwSecs(F, dist(base), baseXY(base)) + missDelay(F, dist(base), baseXY(base));
+    const throwAt = (base, time) => time + plannedThrow(base).ready;
     const forced = (entry) => entry.start === 0 || entry.start === 1 || (entry.start === 2 && g.bases[0]) || (entry.start === 3 && g.bases[0] && g.bases[1]);
     const noise = (sd) => rng.gauss() * sd;
 
@@ -1984,7 +2231,7 @@
       const target = entry.start + 1;
       if (throwAt(target, T) < arrive(entry, target) - 0.02) {
         if (throwAt(target, T) + noise(0.1) < arrive(entry, target) + noise(0.08)) {
-          if (rng.chance(throwingErrorP(F))) throwError = true;
+          if (plannedThrow(target).wild) throwError = true;
           else {
             entry.out = true;
             forceOutAt = target;
@@ -1996,7 +2243,7 @@
     }
     if (!forceOutAt && !throwError) {
       if (throwAt(1, T) + noise(0.1) < arrive(batterEntry, 1) + noise(0.08)) {
-        if (rng.chance(throwingErrorP(F))) throwError = true;
+        if (plannedThrow(1).wild) throwError = true;
         else {
           batterEntry.out = true;
           result.outs += 1;
@@ -2006,12 +2253,15 @@
     if (forceOutAt && outsBefore + result.outs < 3) {
       const pivotPos = forceOutAt === 2 ? (F.pos === '2B' ? 'SS' : '2B') : forceOutAt === 3 ? (F.pos === '3B' ? 'SS' : '3B') : 'C';
       const pivot = fielders.find((fielder) => fielder.pos === pivotPos) || F;
-      const pivotArrive = throwAt(forceOutAt, T) + 0.55 + Math.hypot(baseXY(forceOutAt).x - BASE_XY[1].x, baseXY(forceOutAt).y - BASE_XY[1].y) / pivot.fp.armFps;
-      if (pivotArrive + noise(0.1) < arrive(batterEntry, 1) + noise(0.08) && !rng.chance(throwingErrorP(pivot))) {
+      const pivotFielder = { ...pivot, ...baseXY(forceOutAt), pickup: null, recovery: 0 };
+      const pivotThrow = resolvedThrow(g, pivotFielder, baseXY(1), 1,
+        throwAt(forceOutAt, T) + transferSecs(pivotFielder, baseXY(1)), fielders.find(f => f.pos === '1B') || pivot, ball.wind);
+      if (pivotThrow.ready + noise(0.1) < arrive(batterEntry, 1) + noise(0.08) && !pivotThrow.wild) {
         batterEntry.out = true;
         result.outs += 1;
         result.dp = true;
         result.dpPath = [F.pos, pivotPos, '1B'];
+        result.pivotThrow = pivotThrow;
       }
     }
     const endsInning = outsBefore + result.outs >= 3;
@@ -2082,21 +2332,10 @@
     else if (result.stretchTarget) throwBase = result.stretchTarget;
     else if (batterEntry.out) throwBase = 1;
     else throwBase = isOF ? clamp(Math.max(1, batterEntry.base) + 1, 2, 3) : 1;
-    const release = T + transferSecs(F, baseXY(throwBase));
-    const arrive1 = T + throwSecs(F, dist(throwBase), baseXY(throwBase));
-    result.throws.push({
-      from: { x: spot.x, y: spot.y }, to: baseXY(throwBase), base: throwBase,
-      release, arrive: arrive1, receiver: receiverFor(throwBase, F.pos)
-    });
+    recordThrow(throwBase, T);
     if (result.dp) {
-      const pivotPos = result.dpPath[1];
-      const pivot = fielders.find((fielder) => fielder.pos === pivotPos) || F;
-      result.throws.push({
-        from: baseXY(forceOutAt), to: baseXY(1), base: 1,
-        release: arrive1 + 0.55,
-        arrive: arrive1 + 0.55 + Math.hypot(baseXY(forceOutAt).x - BASE_XY[1].x, baseXY(forceOutAt).y - BASE_XY[1].y) / pivot.fp.armFps,
-        receiver: receiverFor(1, pivotPos)
-      });
+      result.throws.push(result.pivotThrow);
+      delete result.pivotThrow;
     }
     return result;
   }
@@ -2246,6 +2485,7 @@
     const { event, ff } = held;
     const contact = held.ballInPlay || held.foulBall;
     const ball = flightSim(contact.ev, contact.la, contact.dir, g.park, flyOf(g, contact));
+    ball.lineCall = foulLineCall(ball, g.park, ff.umpFair);
     markTouch(ball, () => flightSim(contact.ev, contact.la, contact.dir, g.park, flyOf(g, contact, { noFence: true })));
     held.shownFair = ff.umpFair;
     delete event.held;
@@ -2443,7 +2683,11 @@
     for (const c of [ballInPlay, foulBall]) if (c) prepBall(g, c, c.pullSign);
 
     // Fair means the ball lands on or inside the park's foul lines (or clips the pole); anything else is foul.
-    const flightOf = (c, extra) => flightSim(c.ev, c.la, c.dir, g.park, flyOf(g, c, extra));
+    const flightOf = (c, extra) => {
+      const flight = flightSim(c.ev, c.la, c.dir, g.park, flyOf(g, c, extra));
+      if (ff) flight.lineCall = foulLineCall(flight, g.park, ff.umpFair);
+      return flight;
+    };
     const isFair = (c) => { const f = flightOf(c); return f.fair || f.pole; };
     if (!(held && held.stage === 'ff')) {
       if (ballInPlay && !isFair(ballInPlay)) {
@@ -2469,6 +2713,7 @@
           pa.held = { stage: 'ff', pitch, swing, event, ballInPlay, foulBall, ff, review: g.review };
           event.held = 'ff';
           event.heldFlight = markTouch(probe, () => flightOf(contact, { noFence: true })) || probe;
+          event.heldFlight.lineCall = foulLineCall(probe, g.park, ff.umpFair);
           return event;
         }
       }
@@ -2626,7 +2871,7 @@
     const flight = 60.5 / (Math.max(60, mph) * 1.46667);
     const fp = fieldProfile(catcher);
     const throwFt = base === 1 ? 127.3 : base === 2 ? 90 : 0;
-    const A = base === 3 ? 0.45 : 0.6 + throwFt / fp.armFps + 0.18;
+    const A = base === 3 ? 0.45 : 0.6 + throwPlan(fp.armFps, throwFt).duration + 0.18;
     const margin = delivery + flight + A - runSecs;
     return { margin, A, R: Math.max(0.6, A - margin) };
   }
@@ -2951,7 +3196,8 @@
     return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
   }
 
-  const flightSecs = (fielder, distance, target) => distance / (fielder.fp.armFps * throwMotion(fielder, target).arm) + (distance > 200 ? 0.45 : 0);
+  const flightSecs = (fielder, distance, target) => distance <= 12 ? distance / fielder.fp.speed
+    : throwPlan(fielder.fp.armFps * throwMotion(fielder, target).arm, distance).duration;
 
   function runDistance(time, vmax, ramp0) {
     const t = Math.max(0, time), ramp = Math.min(t, RAMP_TIME);
@@ -2990,6 +3236,8 @@
 
     const ballState = { mode: 'flight', x: 0, y: 0, z: 3, holder: null, throwing: null, chaser: null, pickupAt: null };
     const throwsLog = [];
+    const umpireCalls = [];
+    let lineCallPending = ball.lineCall;
     const errors = [];
     let plan;
     let planRelay = false;
@@ -3008,34 +3256,45 @@
     for (const f of fielders) { f.hx = f.x; f.hy = f.y; f.lastDest = null; }
     function replan() {
       const b = ballState;
+      const carryingReceiver = b.holder && b.holder.playReceiver;
       const busy = (f) => !!(f.run || b.chaser === f || b.holder === f || f.relayTo != null || f.chase
-        || (b.throwing && b.throwing.receiver === f) || (f === F && b.mode === 'flight'));
+        || carryingReceiver === f || (b.throwing && b.throwing.receiver === f) || (f === F && b.mode === 'flight'));
       const heading = [];
       for (const e of entries) {
         if (!alive(e)) continue;
         if (e.state === 'run') heading.push(e.target);
         else if (e.state === 'back') heading.push(e.retreat);
-        else if (e.prog < 4 && (e.isBatter || e.forcedInit)) heading.push(Math.floor(e.prog + 1e-6) + 1);
-        else if (e.prog === 3 && b.mode !== 'held') heading.push(4);
+        else if (e.prog < 4) heading.push(Math.floor(e.prog + 1e-6) + 1);
       }
+      if (b.holder && typeof b.holder.playBase === 'number') heading.push(b.holder.playBase);
+      if (typeof plan === 'number') heading.push(plan);
       const bases = heading.filter((x) => x >= 1 && x <= 4);
       const free = new Set(fielders.filter((f) => !busy(f)).map((f) => f.pos));
-      const ballPt = b.mode === 'flight' ? readTarget(observedBall(ball, Math.min(ball.pts.length - 1, Math.floor(live.t * 120)), F.fp), F, live.t) : { x: b.x, y: b.y };
+      const ballPt = b.mode === 'flight' ? readTarget(observedBall(ball, Math.min(ball.pts.length - 1, Math.floor(live.t * 120)), F.fp), F, live.t, g.park) : { x: b.x, y: b.y };
       const holder = b.holder || (b.mode === 'flight' ? F : b.chaser);
-      const plan = supportPlan({
+      const assignments = supportPlan({
         park: g.park,
         fielders: fielders.map((f) => ({ pos: f.pos, x: f.x, y: f.y, hx: f.hx, hy: f.hy, speed: f.fp.speed })),
         free, ball: ballPt, thrower: holder ? { x: holder.x, y: holder.y } : null,
-        bases, lead: bases.length ? Math.max(...bases) : 0
+        bases, lead: bases.length ? Math.max(...bases) : 0,
+        coveredBases: [
+          ...(carryingReceiver ? [b.holder.playBase] : []),
+          ...(b.throwing && !b.throwing.relay ? [b.throwing.base] : [])
+        ]
       });
+      for (const base of Object.keys(covers)) delete covers[base];
+      if (carryingReceiver) covers[b.holder.playBase] = carryingReceiver;
+      if (b.throwing && !b.throwing.relay) covers[b.throwing.base] = b.throwing.receiver;
       for (const f of fielders) {
-        const p = plan[f.pos];
+        const p = assignments[f.pos];
         if (!p || !free.has(f.pos)) continue;
-        if (!f.lastDest || Math.hypot(f.lastDest.x - p.x, f.lastDest.y - p.y) > 3) {
+        if (!f.lastDest || Math.hypot(f.lastDest.x - p.x, f.lastDest.y - p.y) > 3
+          || f.job !== p.job || (p.job === 'cover' && f.coverBase !== p.base)) {
           f.lastDest = { x: p.x, y: p.y };
           f.dest = Math.hypot(f.x - p.x, f.y - p.y) > 1.5 ? { x: p.x, y: p.y } : null;
         }
         f.job = p.job;
+        f.coverBase = p.job === 'cover' ? p.base : null;
         if (p.job === 'cover' && !(b.throwing && b.throwing.base === p.base)) covers[p.base] = f;
       }
     }
@@ -3084,17 +3343,23 @@
     }
 
     // ---- ETA helpers
+    function deliverySecs(h, base) {
+      const direct = flightSecs(h, dist2(h, baseXY(base)), baseXY(base));
+      const cut = cutoffFor(h, base);
+      return cut ? direct - Math.max(0, cut.saves) : direct;
+    }
+
     function ballEta(base) {
       const target = baseXY(base);
       const b = ballState;
       if (b.mode === 'held') {
         const h = b.holder;
-        return Math.max(0, h.transferAt - live.t) + Math.max(0, transferSecs(h, target) - h.holdT) + flightSecs(h, dist2(h, target), target) + 0.1;
+        return Math.max(0, h.transferAt - live.t) + Math.max(0, transferSecs(h, target) - h.holdT) + deliverySecs(h, base) + 0.1;
       }
       if (b.mode === 'thrown') {
         const th = b.throwing;
-        const rest = Math.max(0, th.t1 - live.t);
-        if (th.base === base && !th.wild) return rest;
+        const rest = th.t1 >= live.t ? th.t1 - live.t : dist2(th.receiver, b) / th.receiver.fp.speed + 0.15;
+        if (th.base === base && !th.relay) return rest;
         const who = th.receiver || F;
         return rest + transferSecs(who, target) + flightSecs(who, dist2(th.to, target), target) + 0.1;
       }
@@ -3146,6 +3411,8 @@
       };
       if (pose.z || pose.tilt) h.pickup = null;
       h.throwTarget = baseXY(typeof plan === 'number' ? plan : 1);
+      h.playBase = null;
+      h.playReceiver = null;
       h.caughtAt = live.t;
       h.carryPickup = b.mode !== 'thrown';
       b.mode = 'held';
@@ -3201,6 +3468,7 @@
       batter.out = true;
       batter.outBy = 'air';
       batter.outAt = live.t;
+      umpireCalls.push({ t: live.t, out: true, x: ballState.x, y: ballState.y });
       log('Caught by ' + F.pos);
       for (const e of entries) {
         if (e.isBatter || !alive(e) || e.state !== 'run' || e.prog <= e.start + 0.02) continue;
@@ -3221,6 +3489,8 @@
       const missed = rng.chance(0.3 * Math.exp(-c.sec / 0.3));
       c.t = live.t;
       c.ruledOut = missed ? !c.truthOut : c.truthOut;
+      const spot = c.how === 'tag' ? pathPoint(e.prog) : baseXY(c.base);
+      umpireCalls.push({ t: live.t, out: c.ruledOut, x: spot.x, y: spot.y });
       e.call = c;
       e.rulings = e.rulings || [];
       e.rulings.push(c);
@@ -3258,6 +3528,8 @@
     function hitByBall(e) {
       deadBall = true;
       hitRunner = e;
+      const spot = pathPoint(e.prog);
+      umpireCalls.push({ t: live.t, out: true, x: spot.x, y: spot.y });
       e.out = true;
       e.outBy = 'hit';
       e.outAt = live.t;
@@ -3340,26 +3612,64 @@
         }
       } else if (b.mode === 'thrown') {
         const th = b.throwing;
-        const u = clamp((live.t - th.t0) / Math.max(0.05, th.t1 - th.t0), 0, 1);
-        const d = dist2(th.from, th.to);
-        b.x = th.from.x + (th.to.x - th.from.x) * u;
-        b.y = th.from.y + (th.to.y - th.from.y) * u;
-        b.z = 5 + Math.min(22, d * 0.1) * 4 * u * (1 - u);
-        if (u >= 1) {
-          if (th.wild) {
-            const near = nearestFielder(th.to);
-            looseBall(th.to.x, th.to.y, near.f, near.eta + 0.35);
-            log('Wild throw');
-          } else {
-            if (canFieldAt(th.receiver, b)) {
-              th.receiver.dest = null;
-              pickUp(th.receiver);
-              if (th.back) th.receiver.dest = th.back;
-            } else {
-              looseBall(th.to.x, th.to.y, th.receiver, 0);
-              log('Throw gets past ' + th.receiver.pos);
-            }
+        const elapsed = live.t - th.t0;
+        const point = trajectoryPoint(th.flight.pts, elapsed);
+        b.x = point.x; b.y = point.y; b.z = point.z;
+        const catcher = fielders.find(f => (f !== th.thrower || elapsed > 0.3)
+          && elapsed > 0.05 && canFieldAt(f, point));
+        if (catcher) {
+          th.record.t1 = live.t;
+          th.record.to = { x: point.x, y: point.y };
+          th.record.receiver = catcher.pos;
+          const distance = dist2(th.from, th.target);
+          const lateral = Math.abs((point.x - th.from.x) * (th.target.y - th.from.y)
+            - (point.y - th.from.y) * (th.target.x - th.from.x)) / distance;
+          if (lateral > 16 || (elapsed > th.flight.duration + 0.5 && dist2(point, th.target) > 16)) {
+            th.record.wild = true;
+            errors.push({ pos: th.thrower.pos });
+            if (th.base === 1) errBatter = true;
           }
+          if (th.relay && catcher === th.receiver) catcher.relayTo = th.relayBase;
+          pickUp(catcher);
+          if (!th.relay && dist2(catcher, th.target) > 2.2 && dist2(catcher, th.target) <= 12) catcher.dest = { ...th.target };
+          return;
+        }
+        if (live.t >= th.nextRead) {
+          th.nextRead = live.t + 0.12;
+          const index = Math.min(th.flight.pts.length - 1, Math.floor(elapsed * 120));
+          const read = observedBall(th.flight, index, th.receiver.fp);
+          const v2 = read.vx ** 2 + read.vy ** 2;
+          const along = v2 > 1 ? ((th.target.x - read.x) * read.vx + (th.target.y - read.y) * read.vy) / v2 : 0;
+          const ahead = clamp(along, read.age + 0.1, 1.5);
+          const predicted = read.z > 0 ? projectRead(read, ahead)
+            : { x: read.x + read.vx * ahead, y: read.y + read.vy * ahead };
+          th.receiver.dest = along > 1.5 && elapsed < th.flight.duration
+            ? { ...th.target } : keepInside(g.park, predicted.x, predicted.y);
+          if (elapsed > th.flight.duration + 0.25) {
+            const near = nearestFielder(b);
+            near.f.dest = keepInside(g.park, read.x + read.vx * 0.2, read.y + read.vy * 0.2);
+          }
+        }
+        const last = th.flight.pts[th.flight.pts.length - 1];
+        if (elapsed >= last.t) {
+          if (th.flight.escaped) {
+            deadBall = true;
+            for (const e of entries) {
+              if (!alive(e)) continue;
+              const award = th.awards.get(e.id);
+              e.mustReturn = false;
+              if (award > e.prog) startRun(e, award, true);
+            }
+            log('Throw out of play — two-base award');
+          }
+          th.record.t1 = live.t;
+          th.record.to = { x: b.x, y: b.y };
+          th.record.wild = true;
+          errors.push({ pos: th.thrower.pos });
+          if (th.base === 1) errBatter = true;
+          const rest = keepInside(g.park, b.x, b.y);
+          const near = nearestFielder(rest);
+          looseBall(rest.x, rest.y, near.f, near.eta);
         }
       } else {
         b.x = b.holder.x;
@@ -3388,7 +3698,7 @@
           f.dest = { x: fr.body.x, y: fr.body.y };
           const d = dist2(f, f.dest), step = Math.min(d, f.fp.speed * dt);
           if (d) { f.x += (f.dest.x - f.x) / d * step; f.y += (f.dest.y - f.y) / d * step; }
-        } else if (ballState.holder === f && f.carryPickup && f.pickup && live.t - f.caughtAt < 1.2 && !f.move) {
+        } else if (ballState.holder === f && f.playBase == null && f.carryPickup && f.pickup && live.t - f.caughtAt < 1.2 && !f.move) {
           const carry = Math.exp(-(live.t - f.caughtAt) / 0.75);
           f.x += f.pickup.vx * carry * dt;
           f.y += f.pickup.vy * carry * dt;
@@ -3430,14 +3740,14 @@
           // A runner who turned around is still live: go after him at the base he is heading back to.
           const base = e.retreat;
           if (base < 1 || e.prog <= base + 0.02) continue;
-          const tb = flightSecs(h, dist2(h, baseXY(base)), baseXY(base)) + 0.1;
+          const tb = deliverySecs(h, base) + 0.1;
           const need = runEta(e, (e.prog - base) * 90);
           cands.push({ e, base, tb, forced: false, slack: need + e.noise - (tb + 0.05 - riskAdj), feasible: need + e.noise > tb + 0.05 - riskAdj, back: true });
           continue;
         }
         if (e.state !== 'run' || e.prog >= e.target) continue;
         const base = e.target;
-        const tb = flightSecs(h, dist2(h, baseXY(base)), baseXY(base)) + 0.1;
+        const tb = deliverySecs(h, base) + 0.1;
         const need = runEta(e, (base - e.prog) * 90);
         const forced = forcedAt(e, base);
         let margin = forced ? 0 : 0.12;
@@ -3481,12 +3791,14 @@
 
     function receiverFor(base, thrower) {
       const cover = covers[base];
-      if (cover && cover !== thrower && !cover.chase && ballState.chaser !== cover) return cover;
+      if (cover && cover !== thrower && !cover.chase && ballState.chaser !== cover && !cover.relayTo) return cover;
       let best = null;
       let bestEta = Infinity;
       for (const f of fielders) {
-        if (f === thrower) continue;
-        const eta = dist2(f, baseXY(base)) / f.fp.speed;
+        if (f === thrower || f === ballState.chaser || f.relayTo != null || f.chase) continue;
+        const reserved = Object.entries(covers).some(([bag, man]) => man === f && Number(bag) !== base);
+        const eta = dist2(f, baseXY(base)) / f.fp.speed + (reserved ? 5 : 0)
+          + (INFIELD.has(f.pos) ? 0 : 3);
         if (eta < bestEta) {
           bestEta = eta;
           best = f;
@@ -3498,93 +3810,52 @@
 
     // A relay man cuts the throw off when the arm is weak or the distance is long.
     function cutoffFor(h, base) {
-      if (base === 4 && dist2(h, baseXY(4)) < 150) return null;
-      const target = baseXY(base);
-      const d = dist2(h, target);
-      if (d < 140) return null;
-      let best = null;
-      let bestScore = Infinity;
-      for (const f of fielders) {
-        if (f === h || f === covers[base] || !INFIELD.has(f.pos) || f.pos === 'C' || f.pos === 'P') continue;
-        const mid = { x: h.x + (target.x - h.x) * 0.55, y: h.y + (target.y - h.y) * 0.55 };
-        const score = dist2(f, mid) / f.fp.speed;
-        if (score < bestScore) {
-          bestScore = score;
-          best = f;
-        }
-      }
-      if (!best) return null;
-      const mid = { x: h.x + (target.x - h.x) * 0.55, y: h.y + (target.y - h.y) * 0.55 };
-      const direct = flightSecs(h, d, target);
-      const viaRelay = Math.max(flightSecs(h, dist2(h, mid), mid), dist2(best, mid) / best.fp.speed) + transferSecs(best) * 0.6 + flightSecs(best, dist2(mid, target), target);
-      return { man: best, mid, saves: direct - viaRelay };
+      return cutoffPlan(h, baseXY(base), fielders, receiverFor(base, h));
     }
 
     function doThrow(h, base, relay) {
       const target = baseXY(base);
-      const from = { x: h.x, y: h.y };
       const d = dist2(h, target);
       h.throwTarget = target;
-      const technique = throwMotion(h, target);
-      plan = undefined;
-      if (d <= 12) {
-        h.dest = { x: target.x, y: target.y };
-        return;
-      }
       const cut = relay ? cutoffFor(h, base) : null;
-      if (cut) {
-        const legTechnique = throwMotion(h, cut.mid);
-        const wildLeg = rng.chance(throwingErrorP(h) * 0.7 * legTechnique.spread);
-        const sd = throwSpread(h, dist2(h, cut.mid), cut.mid);
-        const to = { x: cut.mid.x + rng.gauss() * sd, y: cut.mid.y + rng.gauss() * sd };
-        if (wildLeg) {
-          to.x += rng.between(-18, 18);
-          to.y += rng.between(18, 40);
-          errors.push({ pos: h.pos });
-        }
-        const dur = Math.max(flightSecs(h, dist2(h, to), cut.mid), wildLeg ? 0 : dist2(cut.man, to) / cut.man.fp.speed);
-        cut.man.dest = wildLeg ? null : { ...to };
-        cut.man.relayTo = wildLeg ? null : base;
-        ballState.mode = 'thrown';
-        ballState.holder = null;
-        ballState.throwing = { from, to, t0: live.t, t1: live.t + dur, base: -1, receiver: wildLeg ? null : cut.man, wild: wildLeg };
-        throwsLog.push({ from, to, t0: live.t, t1: live.t + dur, base, receiver: wildLeg ? null : cut.man.pos, thrower: h.pos, wild: wildLeg, relay: true });
-        log(`${h.pos} throws to the cutoff man, ${cut.man.pos}`);
+      const aim = cut ? cut.mid : target;
+      const receiver = cut ? cut.man : receiverFor(base, h);
+      const duration = flightSecs(h, dist2(h, aim), aim);
+      const receiverTime = Math.max(0, dist2(receiver, aim) - receiver.fp.reach) / receiver.fp.speed;
+      if (d <= 12 || receiverTime > Math.max(0, duration - 0.08)) {
+        h.playBase = base;
+        h.playReceiver = receiver;
+        h.dest = { x: target.x, y: target.y };
+        receiver.dest = { ...aim };
+        receiver.lastDest = null;
         return;
       }
-      const receiver = receiverFor(base, h);
-      let to = { x: target.x, y: target.y };
-      let wild = rng.chance(throwingErrorP(h) * technique.spread * (1 + ((h.p.risk || 50) - 50) / 150));
-      let dur = flightSecs(h, d, target);
-      // Every throw misses its target a little: more with distance, less with a stronger arm.
-      const sd = throwSpread(h, d, target);
-      const along = rng.gauss() * sd;
-      const side = rng.gauss() * sd;
-      const miss = Math.hypot(along, side);
-      const ux = (target.x - from.x) / d;
-      const uy = (target.y - from.y) / d;
-      if (!wild && miss > 2.5) {
-        to = { x: target.x + ux * along - uy * side, y: target.y + uy * along + ux * side };
-        if (miss > 16) wild = true;
-      }
-      if (wild) {
-        if (miss <= 16) {
-          const over = rng.between(18, 40);
-          const wide = rng.between(-18, 18);
-          to = { x: target.x + ux * over - uy * wide, y: target.y + uy * over + ux * wide };
-        }
-        dur = flightSecs(h, dist2(from, to), target);
-        errors.push({ pos: h.pos });
-        if (base === 1) errBatter = true;
-      } else {
-        receiver.dest = { x: to.x, y: to.y };
-        dur = Math.max(dur, dist2(receiver, to) / receiver.fp.speed);
-      }
+      h.playBase = null;
+      h.playReceiver = null;
+      plan = undefined;
+      const flight = throwFlight(h, aim, g.park, rng, { wind: ball.wind, rho: g.env ? g.env.rho : 1 });
+      const from = { x: h.x, y: h.y }, to = trajectoryPoint(flight.pts, flight.duration);
+      receiver.dest = { ...aim };
+      const record = {
+        from, to, t0: live.t, t1: live.t + flight.duration, base,
+        receiver: receiver.pos, thrower: h.pos, wild: false, relay: !!cut,
+        points: flight.pts,
+        speed: flight.speed, directionError: flight.directionError, angleError: flight.angleError, perfect: flight.perfect
+      };
       ballState.mode = 'thrown';
       ballState.holder = null;
-      ballState.throwing = { from, to, t0: live.t, t1: live.t + dur, base, receiver: wild ? null : receiver, wild, back: !wild && miss > 2.5 ? { x: target.x, y: target.y } : null };
-      throwsLog.push({ from, to, t0: live.t, t1: live.t + dur, base, receiver: wild ? null : receiver.pos, thrower: h.pos, wild });
-      log(`${h.pos} throws to ${base === 4 ? 'home' : base + 'B'}`);
+      ballState.x = flight.pts[0].x;
+      ballState.y = flight.pts[0].y;
+      ballState.z = flight.pts[0].z;
+      const fromPitch = INFIELD.has(h.pos) && throwsLog.length === 0
+        && !entries.every(e => e.reached > e.start);
+      ballState.throwing = {
+        from, to, t0: live.t, t1: record.t1, base: cut ? -1 : base, receiver, thrower: h,
+        target: { ...aim }, flight, record, nextRead: live.t + 0.15, relay: !!cut, relayBase: base,
+        awards: new Map(entries.filter(alive).map(e => [e.id, Math.min(4, (fromPitch ? e.start : Math.floor(e.prog)) + 2)]))
+      };
+      throwsLog.push(record);
+      log(cut ? `${h.pos} throws to the cutoff man, ${cut.man.pos}` : `${h.pos} throws to ${base === 4 ? 'home' : base + 'B'}`);
     }
 
     function holderLogic() {
@@ -3599,17 +3870,30 @@
         h.dest = null;
         h.chase = false;
         h.relayTo = null;
+        h.playBase = null;
+        h.playReceiver = null;
         return;
       }
+      if (fieldHuman && plan === 'hold') {
+        if (h.playBase != null) h.dest = null;
+        h.playBase = null;
+        h.playReceiver = null;
+      }
+      if (h.playBase != null && dist2(h, baseXY(h.playBase)) <= 1.5) {
+        h.dest = null;
+        h.playBase = null;
+        h.playReceiver = null;
+        if (fieldHuman) plan = 'hold';
+      }
       if (h.relayTo != null) {
-        if (h.holdT >= transferSecs(h) * 0.6) {
+        if (h.holdT >= transferSecs(h, baseXY(h.relayTo))) {
           const next = h.relayTo;
           h.relayTo = null;
           doThrow(h, next, false);
         }
         return;
       }
-      if (h.dest && !h.chase) return;
+      if (h.dest && !h.chase && h.playBase == null) return;
       if (h.holdT < transferSecs(h) || live.t < h.thinkAt) return;
       h.thinkAt = live.t + 0.1;
       let choice;
@@ -3618,7 +3902,8 @@
       else if (fieldHuman && typeof plan === 'number') {
         choice = plan;
         relay = planRelay;
-      } else {
+      } else if (h.playBase != null) choice = h.playBase;
+      else {
         choice = aiThrow(h);
         if (choice !== 'hold') {
           const cut = cutoffFor(h, choice);
@@ -3675,9 +3960,14 @@
       e.reached = Math.max(e.reached, base);
       e.from = base;
       const th = ballState.mode === 'thrown' ? ballState.throwing : null;
-      if (e.safeBase !== base && th && dist2(th.to, baseXY(base)) < 8 && th.t1 - live.t < 1.5) {
+      if (e.safeBase !== base && th && !th.relay && dist2(th.to, baseXY(base)) < 8
+        && th.t1 >= live.t - 0.05 && th.t1 - live.t < 1.5) {
         const how = isForced(e) && base === e.start + 1 ? 'force' : 'tag';
         if (ruleRunner(e, { truthOut: false, base, sec: Math.max(0, th.t1 - live.t), how })) return;
+      }
+      if (!deadBall && !thirdOut && (!e.call || e.call.base !== base || e.call.t !== live.t) && e.safeBase !== base) {
+        const spot = baseXY(base);
+        umpireCalls.push({ t: live.t, out: false, x: spot.x, y: spot.y });
       }
       if (base >= 4) {
         e.scored = true;
@@ -3685,7 +3975,7 @@
         e.state = 'scored';
         return;
       }
-      const want = !thirdOut && (e.userCont !== undefined ? e.userCont : aiGo(e, base + 1));
+      const want = !thirdOut && !deadBall && (e.userCont !== undefined ? e.userCont : aiGo(e, base + 1));
       e.userCont = undefined;
       if (want && !blocked(base + 1)) e.target = base + 1;
       else {
@@ -3696,6 +3986,7 @@
     }
 
     function outChecks() {
+      if (deadBall) return;
       const b = ballState;
       if (b.mode !== 'held') return;
       const h = b.holder;
@@ -3717,7 +4008,7 @@
     }
 
     function aiRunners() {
-      if (thirdOut) return;
+      if (thirdOut || deadBall) return;
       if (live.t < nextAi) return;
       nextAi = live.t + 0.2;
       if (ballState.mode === 'flight' && fr.air && !twoOuts) return;
@@ -3743,6 +4034,10 @@
     live.step = (dt) => {
       if (live.done) return;
       live.t += dt;
+      if (lineCallPending && live.t >= lineCallPending.t) {
+        if (ballState.mode === 'flight') umpireCalls.push({ ...lineCallPending });
+        lineCallPending = null;
+      }
       moveFielders(dt);
       ballFlow();
       if (live.t >= nextPlan) {
@@ -3760,6 +4055,12 @@
       if (!cmd) return;
       if (cmd.kind === 'throw') {
         if (fieldHuman) {
+          const holder = ballState.holder;
+          if (holder && holder.playBase != null && cmd.target !== holder.playBase) {
+            holder.playBase = null;
+            holder.playReceiver = null;
+            holder.dest = null;
+          }
           plan = cmd.target;
           planRelay = !!cmd.relay;
         }
@@ -3814,8 +4115,9 @@
           ? [1, 2, 3, 4].map((base) => { const c = cutoffFor(b.holder, base); return c ? { base, pos: c.man.pos, suggest: c.saves > 0.12 } : null; }).filter(Boolean)
           : [],
         planRelay,
+        umpireCalls: umpireCalls.slice(),
         ball: { x: b.x, y: b.y, z: b.z, mode: b.mode, heldFor: b.mode === 'held' ? live.t - b.holder.caughtAt : 0 },
-        fielders: fielders.map((f) => ({ pos: f.pos, name: shortName(f.p.name), height: f.p.height, weight: f.p.weight, x: f.x, y: f.y, pose: motion.pose(f.move, live.t, f.fp.height), has: b.mode === 'held' && b.holder === f })),
+        fielders: fielders.map((f) => ({ pos: f.pos, name: shortName(f.p.name), height: f.p.height, weight: f.p.weight, x: f.x, y: f.y, job: f.job, coverBase: f.coverBase, pose: motion.pose(f.move, live.t, f.fp.height), has: b.mode === 'held' && b.holder === f })),
         runners: entries.map((e) => {
           const p = pathPoint(e.prog);
           const approaching = e.state === 'run' && e.target < 4 && e.target - e.prog <= 0.9;
@@ -3827,7 +4129,11 @@
             canBack: canBack(e)
           };
         }),
-        throws: throwsLog.map((th) => ({ from: th.from, to: th.to, t0: th.t0, t1: th.t1, wild: th.wild, relay: !!th.relay })),
+        throws: throwsLog.map((th) => ({
+          from: th.from, to: th.to, t0: th.t0,
+          t1: b.mode === 'thrown' && b.throwing.record === th ? Math.max(live.t, th.t1) : th.t1,
+          wild: th.wild, relay: !!th.relay, points: th.points, speed: th.speed
+        })),
         events: live.events
       };
     };

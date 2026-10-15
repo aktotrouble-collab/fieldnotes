@@ -102,13 +102,16 @@ for (const kind of ['jump','dive']) {
     if(!control.fieldHuman) g.bases[2]={p:g.teams[0].lineup[1]};
     const live=E.createLivePlay(g,ball,{p:g.teams[0].lineup[0]},{...control,batHuman:true});
     if(control.fieldHuman) live.command({kind:'throw',target:1});
-    let caught=false,firstThrow=null;
+    let caught=false,firstThrow=null,tagged=false;
     for(let ticks=0;ticks<1800&&!live.done;ticks++) {
       live.step(1/120);
       const frame=live.snapshot();
       if(frame.ball.mode==='held'&&!caught) {
         caught=true;
-        if(!control.fieldHuman) live.command({kind:'runner',id:3,action:'go'});
+      }
+      if(caught&&!control.fieldHuman&&!tagged&&live.t>=planned.move.end-0.05) {
+        live.command({kind:'runner',id:3,action:'go'});
+        tagged=true;
       }
       if(frame.throws.length) { firstThrow=frame.throws[0];break; }
     }

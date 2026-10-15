@@ -242,7 +242,7 @@
           <span class="ctl-title">Pitching <i class="tip" tabindex="0" data-tip="Player Control: you pick the pitch type and spot (control and fatigue add misses). Advanced: same, plus a timing meter that tightens or widens your miss.">i</i></span>
           <select id="pctl-0"><option value="sim">Simulated</option><option value="player">Player Control</option><option value="advanced">Advanced (+ timing meter)</option></select>
           <select id="pctl-1"><option value="sim">Simulated</option><option value="player">Player Control</option><option value="advanced">Advanced (+ timing meter)</option></select>
-          <span class="ctl-title">Fielding <i class="tip" tabindex="0" data-tip="Simulated: the CPU chooses every throw. I pick throws: when the ball is fielded you choose the target (1B / 2B / 3B / HOME / HOLD, keys 1-4, H, A). Unanswered decisions use the AI's choice.">i</i></span>
+          <span class="ctl-title">Fielding <i class="tip" tabindex="0" data-tip="Simulated: the CPU chooses every play. I pick throws: choose the target base (1B / 2B / 3B / HOME / HOLD, keys 1-4, H, A). The holder carries toward an uncovered bag until a normal-speed throw can meet the receiver, or reaches the bag himself. Unanswered decisions use the AI's choice. A clear caller camped under a fly keeps it. CF, LF/RF, SS, 2B, 3B, 1B, C, P priority only resolves overlapping claims; other defenders cover bases and relays. FAIR!/FOUL! badges mark rulings within 3 feet of the foul line when a fly lands or a grounder passes first/third or stops.">i</i></span>
           <select id="fctl-0"><option value="sim">Simulated</option><option value="manual">I pick throws</option></select>
           <select id="fctl-1"><option value="sim">Simulated</option><option value="manual">I pick throws</option></select>
           <span class="ctl-title">Coaching <i class="tip" tabindex="0" data-tip="Simulated: the coach makes pinch hits, pinch runs, defensive changes and pitching changes. Manual: you make them yourself; substitutions are permanent, and plate-appearance, half-inning and game buttons pause after every batter so you can make changes.">i</i></span>
@@ -379,7 +379,7 @@
                 <div id="coach-panel" class="hidden" style="margin-top:8px;padding:8px 10px;border:1px solid #0002;border-radius:8px"></div>
                 <div class="row" id="shift-row" style="margin-top:8px"></div>
                 <div class="hidden" id="shift-custom" style="margin-top:6px"></div>
-                <div class="row" id="relay-row" style="margin-top:6px"><label><input type="checkbox" id="relay-on"> Throw via cutoff man (relay, key R) <i class="tip" tabindex="0" data-tip="Routes your next throw through the cutoff man instead of throwing directly. Useful on long outfield throws.">i</i></label><span class="muted" id="relay-hint"></span></div>
+                <div class="row" id="relay-row" style="margin-top:6px"><label><input type="checkbox" id="relay-on"> Throw via cutoff man (relay, key R) <i class="tip" tabindex="0" data-tip="Routes your next throw through an available cutoff man. ARM controls release speed and aim; long throws need more arc and can skip or roll short. The AI uses a relay when it estimates a faster delivery, including the cutoff man's positioning and transfer.">i</i></label><span class="muted" id="relay-hint"></span></div>
                 <label class="muted" style="margin-top:10px">Baserunning / throw decisions <i class="tip" tabindex="0" data-tip="Batting: click GO / STOP / TURN BACK by the base your runner is approaching (keys G / S / B). Fielding: pick the throw target as the fielder gets to the ball. Real-time keeps the play moving; Pause stops it for each decision. Unanswered decisions use the AI's choice.">i</i> <select id="decision"><option value="real" selected>Real-time</option><option value="pause">Pause for each decision</option></select></label>
               </div>
             </div>
@@ -700,7 +700,8 @@
       input.step = "any";
       input.min = "0";
       input.value = obj[key];
-      if (key === "field") input.title = "FLD controls reads and route corrections, fielding errors, jump height, dive distance, move timing and recovery. Moving, backhand and across-body throws take more preparation and lose strength and accuracy; higher FLD helps. Standing glove reach extends above the player's height.";
+      if (key === "arm") input.title = "ARM sets throw release speed and left/right and vertical aim precision. Velocity stays the same across distances unless the throw is off balance. Short throws stay low; longer throws need more arc, and misses spread farther from the ideal line. Throws bounce, roll and hit walls like batted balls. Even a weak arm can occasionally make a perfectly aimed throw.";
+      if (key === "field") input.title = "FLD controls reads and route corrections, fielding errors, jump height, dive distance, move timing and recovery. Routine tracking is tight, but reads and corrections remain harder near the wall. Moving, backhand and across-body throws take more preparation and lose strength and accuracy; higher FLD helps. Standing glove reach extends above the player's height.";
       input.addEventListener("input", () => { obj[key] = Number(input.value); updateRatings(); });
       input.addEventListener("change", () => { obj[key] = Number(input.value); saveTeams(); updateRatings(); });
       return input;
@@ -2521,6 +2522,10 @@
         touch: touchInfo(flight),
         landing: spot,
         fielder: catchInfo || null,
+        umpireCalls: [
+          ...(flight.lineCall && (!catchInfo || flight.lineCall.t < catchInfo.t) ? [flight.lineCall] : []),
+          ...(catchInfo ? [{ t: catchInfo.t, out: true, x: catchInfo.x, y: catchInfo.y }] : [])
+        ],
         throws: [],
         runners: [],
         tracks: buildTracks(rec && rec.snap, points, spot, catchInfo || null, [], [], end + 1.5),
@@ -2986,8 +2991,24 @@
         points = points.filter((point) => point.t < cut);
         points.push({ t: cut, x: spot.x, y: spot.y, z: play.fielding ? play.fielding.z : play.air ? 3 : 0.3 });
       }
-      const throwList = fielded ? (play.throws || []).map((th) => ({ from: th.from, to: th.to, release: th.release, arrive: th.arrive, receiver: th.receiver })) : [];
+      const throwList = fielded ? (play.throws || []).map((th) => ({ from: th.from, to: th.to, release: th.release, arrive: th.arrive, receiver: th.receiver, base: th.base, points: th.points })) : [];
       const tFlightEnd = points.length ? points[points.length - 1].t : 3;
+      const umpireCalls = ball.lineCall && (!fielded || ball.lineCall.t <= play.time) ? [ball.lineCall] : [];
+      if (fielded && play.airOut) umpireCalls.push({ t: play.time, out: true, x: spot.x, y: spot.y });
+      if (fielded && !play.live) for (const entry of play.entries || []) {
+        if (entry.isBatter && play.airOut) continue;
+        const base = Math.min(4, entry.out ? Math.max(entry.start + 1, entry.base) : entry.base);
+        if (base <= entry.start) continue;
+        const runner = runners.find(r => r.name === E.shortName(entry.r.p.name) && r.from === entry.start);
+        const arrival = runner ? runner.delay + runner.duration : play.time;
+        const lastThrow = throwList.filter(th => th.base === base).slice(-1)[0];
+        const at = entry.out && lastThrow ? lastThrow.arrive : arrival;
+        const position = [
+          { x: 0, y: 0 }, { x: 90 / Math.SQRT2, y: 90 / Math.SQRT2 },
+          { x: 0, y: 90 * Math.SQRT2 }, { x: -90 / Math.SQRT2, y: 90 / Math.SQRT2 }
+        ][base % 4];
+        umpireCalls.push({ t: at, out: entry.out, x: position.x, y: position.y });
+      }
       const tRunEnd = runners.reduce((m, r) => Math.max(m, r.delay + r.duration), 0);
       const lastPossession = Math.max(tFlightEnd, ...throwList.map((th) => th.arrive));
       const playEnd = Math.max(tRunEnd, lastPossession + (fielded ? 1.5 : 0));
@@ -3010,6 +3031,7 @@
         landing: fielded ? { x: spot.x, y: spot.y } : ball.landing ? { x: ball.landing.x, y: ball.landing.y } : undefined,
         fielder: primary,
         throws: throwList,
+        umpireCalls,
         runners,
         tracks,
         lead: preRoll(pitch)

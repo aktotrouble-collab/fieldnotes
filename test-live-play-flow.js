@@ -7,7 +7,7 @@ const { createRequire } = require('node:module');
 const filename = path.join(__dirname, 'game-engine.js');
 const source = fs.readFileSync(filename, 'utf8')
   .replace(/\r\n/g, '\n')
-  .replace('const GameEngine = {', 'const GameEngine = { createLivePlay, applyBattedBall,')
+  .replace('const GameEngine = {', 'const GameEngine = { createLivePlay, applyBattedBall, throwFlight,')
   .replace('    return live;\n  }\n\n  const GameEngine', '    live.test = { entries, fielders, ballState, putOut, arrive, pickUp, catchInAir };\n    return live;\n  }\n\n  const GameEngine');
 const sandbox = { module: { exports: {} }, require: createRequire(filename) };
 vm.runInNewContext(source, sandbox, { filename });
@@ -54,6 +54,8 @@ function finish(live, limit = 30, step = dt) {
   live.step(dt);
   assert(runner.prog > 0.95, 'Runner called safe keeps running instead of disappearing');
   assert.equal(live.snapshot().runners[0].out, false, 'Animation agrees with safe ruling');
+  assert.equal(live.snapshot().umpireCalls[0].out, false, 'SAFE popup follows the incorrect on-field ruling');
+  assert.equal(live.snapshot().umpireCalls[0].t, 0, 'Callout is stamped at the call, not the end of the play');
   finish(live);
   assert.equal(live.result().entries[0].out, false);
   const before = live.snapshot();
@@ -68,14 +70,18 @@ function finish(live, limit = 30, step = dt) {
   const b = live.test.ballState;
   b.mode = 'thrown';
   b.holder = null;
+  const thrower = live.test.fielders.find(f => f.pos === 'SS');
+  const flight = E.throwFlight({...thrower,x:0,y:120},holder,g.park);
   b.throwing = {
     from: { x: 0, y: 120 }, to: { x: holder.x, y: holder.y },
-    t0: 0, t1: 0.1, receiver: holder, wild: false, base: 1
+    t0: 0, t1: 0.1, receiver: holder, wild: false, base: 1,
+    flight, target: {x:holder.x,y:holder.y}, thrower, record: {}, nextRead: 0.15
   };
   g.rng.chance = () => true;
   live.test.arrive(runner);
   assert.equal(runner.out, true, 'Incorrect out call immediately retires a physically safe runner');
   assert.equal(runner.state, 'out');
+  assert.equal(live.snapshot().umpireCalls[0].out, true, 'OUT popup follows the incorrect on-field ruling');
   assert(live.prepare()[0].wrong);
   const position = live.snapshot().runners[0].x;
   live.step(dt);

@@ -3642,6 +3642,7 @@
         for (const th of play.throws) {
           if (elapsed < th.release) return at;
           if (elapsed < th.arrive) {
+            if (th.points && th.points.length) return throwPathPoint(th.points, elapsed - th.release);
             const u = (elapsed - th.release) / Math.max(0.05, th.arrive - th.release);
             const dist = Math.hypot(th.to.x - th.from.x, th.to.y - th.from.y);
             return {
@@ -3899,12 +3900,25 @@
       }
 
       function liveThrowPoint(th, k) {
+        if (th.points && th.points.length) return throwPathPoint(th.points, k * (th.t1 - th.t0));
         const dist = Math.hypot(th.to.x - th.from.x, th.to.y - th.from.y);
         return {
           x: th.from.x + (th.to.x - th.from.x) * k,
           y: th.from.y + (th.to.y - th.from.y) * k,
           z: 5 + Math.min(22, dist * 0.1) * 4 * k * (1 - k)
         };
+      }
+
+      function throwPathPoint(points, time) {
+        let low = 0, high = points.length - 1;
+        while (low < high) {
+          const mid = Math.ceil((low + high) / 2);
+          if (points[mid].t <= time) low = mid;
+          else high = mid - 1;
+        }
+        const a = points[low], b = points[Math.min(low + 1, points.length - 1)];
+        const u = Math.max(0, Math.min(1, (time - a.t) / Math.max(0.000001, b.t - a.t)));
+        return { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u, z: a.z + (b.z - a.z) * u };
       }
 
       function drawChip(rect, text, state, action) {
@@ -3923,6 +3937,33 @@
         context.fillText(text, rect.x + rect.w / 2, rect.y + rect.h / 2 + 0.5);
         context.restore();
         gameState.chips.push({ ...rect, action });
+      }
+
+      function drawUmpireCalls(calls, time, width, height) {
+        for (const [index, call] of (calls || []).entries()) {
+          const age = time - call.t;
+          if (age < 0 || age >= 1.2) continue;
+          const point = worldToScreen({ x: call.x, y: call.y, z: 8 }, width, height);
+          const x = Math.max(42, Math.min(width - 42, point.x));
+          const y = Math.max(32, Math.min(height - 65, point.y - 18 - age * 12));
+          const overlaps = calls.slice(0, index).filter(other => time >= other.t && time - other.t < 1.2
+            && Math.hypot(other.x - call.x, other.y - call.y) < 15).length;
+          context.save();
+          context.globalAlpha = Math.min(1, age / 0.08) * Math.min(1, (1.2 - age) / 0.4);
+          context.font = "900 17px system-ui, sans-serif";
+          context.textAlign = "center";
+          context.textBaseline = "middle";
+          context.fillStyle = call.out || call.label === "FOUL!" ? "#a52f2a" : "#176442";
+          context.strokeStyle = "#fffefa";
+          context.lineWidth = 2;
+          context.beginPath();
+          context.roundRect(x - 37, y - 15 - overlaps * 33, 74, 30, 8);
+          context.fill();
+          context.stroke();
+          context.fillStyle = "#fffefa";
+          context.fillText(call.label || (call.out ? "OUT!" : "SAFE!"), x, y - overlaps * 33);
+          context.restore();
+        }
       }
 
       function drawLive(width, height) {
@@ -3988,6 +4029,7 @@
         context.stroke();
         }
         if (frame.touch && frame.t >= frame.touch.t) drawTouchPopup(frame.touch, width, height);
+        if (!pre) drawUmpireCalls(frame.umpireCalls, frame.t, width, height);
         if (frame.replay || frame.done) return;
 
         // interactive chips
@@ -4230,11 +4272,12 @@
           const revealT = typeof play.revealAt === "number" ? play.revealAt : flying[last].t;
           trace((p) => p, elapsed >= revealT ? play.color : "#3a4a40", 1, 1.6);
           const ballPoint = gamePlayBallPoint(play, elapsed);
+          drawUmpireCalls(play.umpireCalls, elapsed, width, height);
           for (const th of play.throws) {
             if (elapsed < th.release) continue;
             const u = Math.min(1, (elapsed - th.release) / Math.max(0.05, th.arrive - th.release));
             const dist = Math.hypot(th.to.x - th.from.x, th.to.y - th.from.y);
-            const point = (k) => ({
+            const point = (k) => th.points && th.points.length ? throwPathPoint(th.points, k * (th.arrive - th.release)) : ({
               x: th.from.x + (th.to.x - th.from.x) * k,
               y: th.from.y + (th.to.y - th.from.y) * k,
               z: 5 + Math.min(22, dist * 0.1) * 4 * k * (1 - k)
@@ -4343,6 +4386,7 @@
             landing: data.landing || { x: last.x, y: last.y },
             fielder: data.fielder || null,
             throws: data.throws || [],
+            umpireCalls: data.umpireCalls || [],
             runners: data.runners || [],
             lead: Math.max(0, Number(data.lead) || 0),
             tracks: data.tracks || null,

@@ -7,7 +7,7 @@ const { createRequire } = require('node:module');
 const filename = path.join(__dirname, 'game-engine.js');
 const sandbox = { module: { exports: {} }, require: createRequire(filename) };
 vm.runInNewContext(fs.readFileSync(filename, 'utf8').replace('const GameEngine = {',
-  'const GameEngine = { createLivePlay, defenseList, fieldBall, fieldProfile, readTarget, readFieldingRoutes, observedBall, throwMotion, throwSpread, transferSecs, flightSecs, seg, toFirst,'
+  'const GameEngine = { createLivePlay, defenseList, fieldBall, fieldProfile, readTarget, projectRead, trackingWallPressure, trackingReadInterval, readFieldingRoutes, observedBall, throwMotion, throwSpread, transferSecs, flightSecs, seg, toFirst,'
 ), sandbox, { filename });
 const E = sandbox.module.exports;
 function game() {
@@ -62,7 +62,7 @@ assert(originalRoutes.SS.some((p,i)=>p[0]>1.2&&Math.hypot(p[1]-changedRoutes.SS[
 const trackingReports = [];
 for (const field of [20,50,90]) {
   const fp = E.fieldProfile({field,speed:50,arm:50});
-  let error = 0, previousError = 0, samples = 0;
+  let error = 0, previousError = 0, previousTrackingError = 0, samples = 0;
   for (const ev of [80,95,110]) for (const la of [22,35,50]) for (const dir of [-25,0,25])
     for (const spin of [{b:1,s:0},{b:0.6,s:0.8}]) for (const wind of [{x:0,y:0},{x:12,y:-8}]) {
       const fly = E.flightSim(ev,la,dir,g.park,{spin,wind,noFence:true});
@@ -75,21 +75,46 @@ for (const field of [20,50,90]) {
         const target = E.readTarget(read,{x:0,y:300,fp},time);
         const falling = (read.vz+Math.sqrt(read.vz**2+2*32.174*read.z))/32.174;
         const drift = (1-Math.exp(-0.12*(Math.min(3,falling)+read.age)))/0.12;
+        const projected=E.projectRead(read);
+        const doubt=0.4*(1-read.skill)/(1+time*0.3);
+        const uncertainty=(1-read.skill)**2*Math.min(12,Math.hypot(read.x,read.y-300)*0.06)/(1+time*0.8);
+        const previousTarget={
+          x:projected.x+(read.x+read.vx*drift-projected.x)*doubt+Math.sin(time*2.1)*uncertainty,
+          y:projected.y+(read.y+read.vy*drift-projected.y)*doubt+Math.cos(time*1.7)*uncertainty
+        };
         error += Math.hypot(target.x-landing.x,target.y-landing.y);
         previousError += Math.hypot(read.x+read.vx*drift-landing.x,read.y+read.vy*drift-landing.y);
+        previousTrackingError += Math.hypot(previousTarget.x-landing.x,previousTarget.y-landing.y);
         samples++;
       }
     }
   const mean = error/samples, previousMean = previousError/samples;
   assert(Number.isFinite(mean) && mean<previousMean*0.75,'Observed drag/curve improves flight reads over coarse extrapolation');
   assert(mean>1,'Tracking remains imperfect, not exact future landing knowledge');
-  trackingReports.push({field,meanError:+mean.toFixed(2),coarseError:+previousMean.toFixed(2),samples});
+  assert(mean<previousTrackingError/samples*0.9,'Tighter routine reads improve on previous misjudgment tuning at every FLD');
+  trackingReports.push({field,meanError:+mean.toFixed(2),priorTrackingError:+(previousTrackingError/samples).toFixed(2),coarseError:+previousMean.toFixed(2),samples});
 }
-assert(trackingReports[2].meanError<trackingReports[0].meanError*0.9,'High FLD meaningfully improves flight estimates');
+assert(trackingReports[2].meanError<trackingReports[0].meanError*0.97,'High FLD still improves already-tight flight estimates');
 assert(trackingReports[1].meanError<trackingReports[0].meanError && trackingReports[2].meanError<trackingReports[1].meanError);
 const low = E.fieldProfile({field:20,speed:50,arm:50}), high = E.fieldProfile({field:90,speed:50,arm:50});
 assert(high.react<low.react,'High FLD reads contact sooner');
 assert.equal(high.vmax,low.vmax,'Tracking skill does not change running speed');
+{
+  const read={x:0,y:280,z:25,vx:0,vy:50,vz:-5,ax:0,ay:0,az:-32.174,age:0.1,skill:0.5};
+  const routine={x:0,y:300,fp:low},wall={x:0,y:E.boundaryAt(g.park,0)-1,fp:low};
+  const routineTarget=E.readTarget(read,routine,1,g.park),wallTarget=E.readTarget(read,wall,1,g.park);
+  assert.equal(routineTarget.wallPressure,0,'Ordinary open-field plays have no wall penalty');
+  assert(wallTarget.wallPressure>0.9,'Read difficulty ramps up within 30 feet of a real wall');
+  const ideal=E.projectRead(read);
+  assert(Math.hypot(wallTarget.x-ideal.x,wallTarget.y-ideal.y)>
+    Math.hypot(routineTarget.x-ideal.x,routineTarget.y-ideal.y)*2,'Wall plays retain substantially more uncertainty');
+  const cornerAngle=27*Math.PI/180,depth=E.boundaryAt(g.park,27);
+  assert(E.trackingWallPressure(routine,{x:Math.sin(cornerAngle)*(depth-1),y:Math.cos(cornerAngle)*(depth-1)},g.park)>0.9,
+    'Observed deep projections also trigger difficulty near angled walls');
+  assert(E.trackingReadInterval(high.tracking,0)<E.trackingReadInterval(low.tracking,0),'High FLD corrects routes more often');
+  assert(E.trackingReadInterval(low.tracking,1)>E.trackingReadInterval(low.tracking,0),'Wall awareness slows corrections relative to open grass');
+  assert(E.trackingReadInterval(low.tracking,0)<0.07+(1-low.tracking)*0.14,'Routine corrections are quicker than previous tuning');
+}
 const fly = E.flightSim(95,35,15,g.park,{noFence:true});
 const redirected = {...fly,pts:fly.pts.map(p=>p.t<=1.2?{...p}:{...p,x:p.x+15})};
 for (const fp of [low,high]) {
@@ -138,5 +163,24 @@ assert(reports.find(r=>r.dir===10).feet>50,'Routine 2B grounder no longer retire
 const shortstopRace=reports.find(r=>r.dir===-10);
 assert(shortstopRace.feet>80 || shortstopRace.first!==null,'Difficult SS play produces a close race or a safe runner');
 assert(movingReleases>=2,'Upright fielders can carry pickup momentum through release');
+vm.runInNewContext(fs.readFileSync(path.join(__dirname,'park-walls.js'),'utf8'),sandbox);
+for (const park of E.PARK_LIST) for (const degrees of [-40,-27,0,27,40]) {
+  const angle=degrees*Math.PI/180,depth=E.boundaryAt(park,degrees);
+  const spot=feet=>({x:Math.sin(angle)*feet,y:Math.cos(angle)*feet});
+  const observer={...spot(200),fp:high};
+  const near=E.trackingWallPressure(observer,spot(depth-1),park);
+  const far=E.trackingWallPressure(observer,spot(depth-70),park);
+  assert(Number.isFinite(near) && near>0.9,'Wall difficulty follows the real park boundary, including corners');
+  assert(near>far,'Wall difficulty eases smoothly farther from the fence');
+}
+{
+  const park=E.parkById('dodgers'),depth=E.boundaryAt(park,0);
+  const observer={...defenders.find(f=>f.pos==='CF'),x:0,y:depth-10};
+  const wallFly=E.flightSim(105,30,0,park);
+  const changed={...wallFly,pts:wallFly.pts.map(p=>p.t<=1.2?{...p}:{...p,x:p.x+20})};
+  const route=E.readFieldingRoutes(wallFly,[observer],park).CF;
+  const other=E.readFieldingRoutes(changed,[observer],park).CF;
+  assert.deepEqual(route.filter(p=>p[0]<=1.2),other.filter(p=>p[0]<=1.2),'Wall awareness cannot peek at future flight samples');
+}
 console.table(reports);
-console.log('Passed: runner timing, moving-throw penalties, causal routes, improved flight estimates and FLD-based tracking.');
+console.log('Passed: runner timing, moving-throw penalties, causal routes, tighter FLD-based tracking and harder wall reads across all parks.');
