@@ -1139,6 +1139,10 @@
       const zoomMaximum = 4.5;
       let viewMode = "topdown";
       let camera = { yaw: 0, elevation: 0.62, scale: 1.05, targetX: 0, targetY: 0 };
+      let gameCameraMode = "free";
+      let freeCamera = { ...camera };
+      let cameraUpdatedAt = 0;
+      let cameraRunner = null;
       const topView = { zoom: 1, x: 0, y: 0 };
       const TOP_MAX_ZOOM = 6;
       const zoomLayer = document.getElementById("zoom-layer");
@@ -3287,6 +3291,7 @@
         const width = bounds.width;
         const height = bounds.height;
         if (!width || !height) return;
+        if (IS_GAME) updateGameCamera(width, height);
         const park = selectedPark();
         context.clearRect(0, 0, width, height);
         context.fillStyle = "#f1efe7";
@@ -3437,6 +3442,122 @@
         return parts.length && /^(jr\.?|sr\.?|ii|iii|iv|v)$/i.test(last) ? `${parts.pop()} ${last}` : last;
       }
       const gameState = { scene: { fielders: [], runners: [], batter: null }, play: null, live: null, chips: [] };
+
+      function setGameCamera(mode, manual = false) {
+        if (!["free", "action", "ball", "runner", "high", "first", "third"].includes(mode)) return;
+        if (mode === gameCameraMode) return;
+        if (gameCameraMode === "free") freeCamera = { ...camera };
+        gameCameraMode = mode;
+        cameraUpdatedAt = 0;
+        cameraRunner = null;
+        if (mode === "free" && !manual) camera = { ...freeCamera };
+        if (manual) window.parent.postMessage({ type: "gm-camera-mode", mode: "free" }, "*");
+      }
+
+      function takeCameraControl() {
+        if (IS_GAME && gameCameraMode !== "free") setGameCamera("free", true);
+      }
+
+      function gamePlayBallPoint(play, elapsed) {
+        const flying = play.points;
+        const last = flying[flying.length - 1];
+        if (elapsed < 0) return { x: 0, y: 60.5, z: 6 };
+        if (elapsed <= last.t) {
+          let i = 0;
+          while (i < flying.length - 1 && flying[i].t < elapsed) i += 1;
+          return flying[i];
+        }
+        let at = { x: last.x, y: last.y, z: Math.max(last.z, 3) };
+        for (const th of play.throws) {
+          if (elapsed < th.release) return at;
+          if (elapsed < th.arrive) {
+            const u = (elapsed - th.release) / Math.max(0.05, th.arrive - th.release);
+            const dist = Math.hypot(th.to.x - th.from.x, th.to.y - th.from.y);
+            return {
+              x: th.from.x + (th.to.x - th.from.x) * u,
+              y: th.from.y + (th.to.y - th.from.y) * u,
+              z: 5 + Math.min(22, dist * 0.1) * 4 * u * (1 - u)
+            };
+          }
+          at = { x: th.to.x, y: th.to.y, z: 3 };
+        }
+        return at;
+      }
+
+      function cameraAction() {
+        const live = gameState.live && gameState.live.frame;
+        if (live && live.pre == null) {
+          const eligible = live.runners.filter((r) => !r.out && !r.scored);
+          const moving = eligible.filter((r) => r.state === "run" || r.state === "back");
+          const runners = moving.length ? moving : eligible;
+          const runner = runners.find((r) => r.id === cameraRunner)
+            || runners.slice().sort((a, b) => b.base - a.base)[0];
+          if (runner) cameraRunner = runner.id;
+          return { ball: live.ball, runner };
+        }
+        const play = gameState.play;
+        if (!play) return { ball: { x: 0, y: 60.5, z: 3 } };
+        const elapsed = (performance.now() - play.start) / 1000 - play.lead;
+        const eligible = play.runners.filter((r) => elapsed >= r.delay && elapsed < r.delay + (r.to - r.from) * r.perBase);
+        const runner = eligible.find((r) => r === cameraRunner) || eligible.slice().sort((a, b) => b.from - a.from)[0];
+        if (runner) cameraRunner = runner;
+        return {
+          ball: gamePlayBallPoint(play, elapsed),
+          runner: runner ? basePathPoint(runner.from, runner.to, elapsed - runner.delay, runner.perBase) : null
+        };
+      }
+
+      function updateGameCamera(width, height) {
+        if (gameCameraMode === "free") return;
+        const now = performance.now();
+        const blend = cameraUpdatedAt ? 1 - Math.exp(-Math.min(0.1, (now - cameraUpdatedAt) / 1000) * 5) : 1;
+        cameraUpdatedAt = now;
+        const action = cameraAction();
+        const ball = action.ball;
+        let yaw = 0;
+        let elevation = 0.68;
+        let focus = { x: 0, y: 175, z: 0 };
+        let anchors = [{ x: -260, y: 0 }, { x: 260, y: 0 }, { x: -230, y: 430 }, { x: 230, y: 430 }];
+        let maxScale = 1.2;
+        if (gameCameraMode === "action") {
+          yaw = -Math.atan2(ball.x, Math.max(100, ball.y)) * 0.4;
+          focus = { x: ball.x * 0.16, y: 170 + (ball.y - 170) * 0.12, z: 0 };
+          anchors.push(ball, { ...ball, z: 0 });
+        } else if (gameCameraMode === "ball" || gameCameraMode === "runner") {
+          const runnerMode = gameCameraMode === "runner";
+          const point = runnerMode ? action.runner || { x: 0, y: 35, z: 0 } : ball;
+          focus = { x: point.x, y: point.y, z: (point.z || 0) * 0.5 };
+          elevation = runnerMode ? 0.7 : 0.6;
+          yaw = -Math.atan2(point.x, Math.max(80, point.y)) * 0.3;
+          const span = runnerMode ? 105 : 150;
+          anchors = [
+            { x: point.x - span, y: point.y - span, z: 0 },
+            { x: point.x + span, y: point.y + span, z: 0 },
+            point, { ...point, z: 0 }
+          ];
+          maxScale = runnerMode ? 2.5 : 2;
+        } else if (gameCameraMode === "high") {
+          elevation = 0.22;
+        } else {
+          yaw = gameCameraMode === "first" ? -0.65 : 0.65;
+          elevation = 0.85;
+        }
+        const cos = Math.cos(yaw);
+        const sin = Math.sin(yaw);
+        const projected = anchors.map((p) => ({
+          x: p.x * cos - p.y * sin,
+          y: (p.x * sin + p.y * cos) * Math.cos(elevation) + (p.z || 0) * Math.sin(elevation)
+        }));
+        const spreadX = Math.max(...projected.map((p) => p.x)) - Math.min(...projected.map((p) => p.x));
+        const spreadY = Math.max(...projected.map((p) => p.y)) - Math.min(...projected.map((p) => p.y));
+        const scale = Math.max(0.4, Math.min(maxScale, 0.82 * 700 / Math.max(1, spreadX), 0.68 * height * 700 / (width * Math.max(1, spreadY))));
+        // The renderer anchors home low in the viewport; offset the target to center the tracked action.
+        const depth = (0.82 - 0.51) * height * 700 / (width * scale * Math.cos(elevation)) - focus.z * Math.tan(elevation);
+        const target = { yaw, elevation, scale, targetX: focus.x - sin * depth, targetY: focus.y - cos * depth };
+        const turn = Math.atan2(Math.sin(yaw - camera.yaw), Math.cos(yaw - camera.yaw));
+        camera.yaw += turn * blend;
+        for (const key of ["elevation", "scale", "targetX", "targetY"]) camera[key] += (target[key] - camera[key]) * blend;
+      }
 
       function basePathPoint(from, to, seconds, perBase) {
         const progress = Math.max(0, Math.min(to - from, seconds / perBase));
@@ -3828,25 +3949,7 @@
           trace((p) => ({ x: p.x, y: p.y, z: 0 }), "#1c2a21", 0.16, 2);
           const revealT = typeof play.revealAt === "number" ? play.revealAt : flying[last].t;
           trace((p) => p, elapsed >= revealT ? play.color : "#3a4a40", 1, 1.6);
-          const ballPoint = (() => {
-            const inHand = { x: tip.x, y: tip.y, z: Math.max(tip.z, 3) };
-            if (elapsed <= flying[last].t) return tip;
-            let at = inHand;
-            for (const th of play.throws) {
-              if (elapsed < th.release) return at;
-              if (elapsed < th.arrive) {
-                const u = (elapsed - th.release) / Math.max(0.05, th.arrive - th.release);
-                const dist = Math.hypot(th.to.x - th.from.x, th.to.y - th.from.y);
-                return {
-                  x: th.from.x + (th.to.x - th.from.x) * u,
-                  y: th.from.y + (th.to.y - th.from.y) * u,
-                  z: 5 + Math.min(22, dist * 0.1) * 4 * u * (1 - u)
-                };
-              }
-              at = { x: th.to.x, y: th.to.y, z: 3 };
-            }
-            return at;
-          })();
+          const ballPoint = gamePlayBallPoint(play, elapsed);
           for (const th of play.throws) {
             if (elapsed < th.release) continue;
             const u = Math.min(1, (elapsed - th.release) / Math.max(0.05, th.arrive - th.release));
@@ -3909,7 +4012,10 @@
       window.addEventListener("message", (event) => {
         const data = event.data;
         if (!IS_GAME || !data || typeof data !== "object") return;
-        if (data.type === "gm-park") {
+        if (data.type === "gm-camera" && event.source === window.parent) {
+          setGameCamera(data.mode);
+          render3D();
+        } else if (data.type === "gm-park") {
           if (!PARKS.some((park) => park.id === data.park) || data.park === selectedStadiumId) return;
           selectedStadiumId = data.park;
           stadiumSelect.value = data.park;
@@ -3931,6 +4037,7 @@
             requestAnimationFrame(gameLoop);
           }
         } else if (data.type === "gm-scene") {
+          cameraRunner = null;
           gameState.live = null;
           gameState.pitch = null;
           if (data.colors) gameState.colors = data.colors;
@@ -3939,7 +4046,10 @@
         } else if (data.type === "gm-frame") {
           const frame = data.frame;
           const live = gameState.live;
-          if (!live || frame.t < live.frame.t) gameState.live = { frame, trail: [] };
+          if (!live || frame.t < live.frame.t) {
+            cameraRunner = null;
+            gameState.live = { frame, trail: [] };
+          }
           else live.frame = frame;
           gameState.play = null;
           const trail = gameState.live.trail;
@@ -3948,6 +4058,7 @@
           if (frame.pre == null && (!prev || Math.hypot(prev.x - tip.x, prev.y - tip.y) > 1.5 || Math.abs(prev.z - tip.z) > 1.5)) trail.push({ x: tip.x, y: tip.y, z: Math.max(tip.z, 0.3) });
           render3D();
         } else if (data.type === "gm-play") {
+          cameraRunner = null;
           gameState.live = null;
           gameState.pitch = null;
           const points = data.points;
@@ -4462,16 +4573,19 @@
       document.getElementById("topdown-button").addEventListener("click", () => setViewMode("topdown"));
       document.getElementById("three-d-button").addEventListener("click", () => setViewMode("3d"));
       function resetCamera() {
+        takeCameraControl();
         camera = { yaw: 0, elevation: 0.62, scale: 1.05, targetX: 0, targetY: 0 };
         resizeCanvas();
       }
 
       function zoomCamera(factor) {
+        takeCameraControl();
         camera.scale = Math.max(zoomMinimum, Math.min(zoomMaximum, camera.scale * factor));
         render3D();
       }
 
       function panCameraByPixels(deltaX, deltaY) {
+        takeCameraControl();
         const bounds = canvas.getBoundingClientRect();
         const scale = bounds.width * camera.scale / 700;
         const horizontal = -deltaX / scale;
@@ -4560,6 +4674,7 @@
         const deltaY = event.clientY - dragState.startY;
         if (Math.abs(deltaX) + Math.abs(deltaY) > 4) dragState.moved = true;
         if (!dragState.moved) return;
+        takeCameraControl();
         if (dragState.mode === "pan") {
           camera.targetX = dragState.targetX;
           camera.targetY = dragState.targetY;
@@ -4588,6 +4703,7 @@
       }, { passive: false });
       canvas.addEventListener("keydown", (event) => {
         if (event.key.startsWith("Arrow")) {
+          takeCameraControl();
           event.preventDefault();
           if (event.key === "ArrowLeft") camera.yaw += .08;
           if (event.key === "ArrowRight") camera.yaw -= .08;

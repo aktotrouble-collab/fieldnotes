@@ -291,7 +291,15 @@
             </div>
             <div class="row" style="margin-top:10px">
               <label class="muted">Baserunning / throw decisions <i class="tip" tabindex="0" data-tip="Batting: click GO / STOP / TURN BACK by the base your runner is approaching (keys G / S / B). Fielding: pick the throw target as the fielder gets to the ball. Real-time keeps the play moving; Pause stops it for each decision. Unanswered decisions use the AI's choice.">i</i> <select id="decision"><option value="real" selected>Real-time</option><option value="pause">Pause for each decision</option></select></label>
-              <span class="muted">Camera <i class="tip" tabindex="0" data-tip="Drag to orbit · Shift/right-drag to pan · Scroll to zoom">i</i></span>
+              <label class="muted">Camera <select id="camera-mode">
+                <option value="free">Free / User Control</option>
+                <option value="action">Wide Action</option>
+                <option value="ball">Follow Ball</option>
+                <option value="runner">Follow Runner</option>
+                <option value="high">Bird's-eye</option>
+                <option value="first">First-base Broadcast</option>
+                <option value="third">Third-base Broadcast</option>
+              </select> <i class="tip" tabindex="0" data-tip="Wide Action keeps the field visible while turning toward the play. Follow Ball tracks flight, catches and throws. Follow Runner tracks the lead active runner. Bird's-eye and the two broadcast views are fixed angles. Drag, pan or zoom at any time to return to Free / User Control. Your camera mode is remembered and also applies to replays.">i</i></label>
               <span class="muted">Umpires <i class="tip" tabindex="0" data-tip="Umpires can miss calls. When one goes against a team you control, press the glowing Challenge button within 1 s (ball/strike) or 8 s (safe/out, fair/foul) and choose what to challenge; ignore it and it fades. A failed challenge costs one (2 ABS and 1 field per team per game); overturning a bad call is free.">i</i></span>
             </div>
             <div class="banner" id="banner" style="margin-top:8px">&nbsp;</div>
@@ -2496,9 +2504,17 @@
     let frameReady = false;
     const post = (message) => { if (frameReady && frame.contentWindow) frame.contentWindow.postMessage(message, "*"); };
     const frameSrc = (park) => `index.html?embed=1&game=1&park=${encodeURIComponent(park)}`;
+    $("camera-mode").addEventListener("change", () => post({ type: "gm-camera", mode: $("camera-mode").value }));
     window.addEventListener("message", (event) => {
-      if (event.source !== frame.contentWindow || !event.data || event.data.type !== "gm-ready") return;
+      if (event.source !== frame.contentWindow || !event.data) return;
+      if (event.data.type === "gm-camera-mode" && event.data.mode === "free") {
+        $("camera-mode").value = "free";
+        $("camera-mode").dispatchEvent(new Event("change", { bubbles: true }));
+        return;
+      }
+      if (event.data.type !== "gm-ready") return;
       frameReady = true;
+      post({ type: "gm-camera", mode: $("camera-mode").value });
       if (game) sendScene();
     });
     function loadPark(parkId) {
