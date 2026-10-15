@@ -1657,6 +1657,7 @@
         weights,
         batterHeight: E.playerHeight(batter),
         batterWeight: E.playerWeight(batter),
+        batterSide: E.batSide(batter, E.currentPitcher(game)),
         batter: batter.name
       };
     }
@@ -1702,9 +1703,32 @@
     }
     function shiftSpec() {
       const cur = game.shifts[1 - game.half];
-      return { preset: "custom", mirror: !!cur.mirror, custom: Object.fromEntries(SHIFT_POS.map((pos) => [
-        pos, { x: Number(cur.custom[pos]?.x) || 0, y: Number(cur.custom[pos]?.y) || 0 }
-      ])) };
+      const mirror = cur.preset === "custom" || cur.edited ? !!cur.mirror : ["pull", "oppo", "ofPull", "auto"].includes(cur.preset);
+      return { preset: "custom", mirror, custom: Object.fromEntries(SHIFT_POS.map((pos) => {
+        const base = E.defaultSpot(pos, game.park);
+        const point = E.shiftedSpot(game, pos, 1 - game.half, { ...E.currentBatter(game), bats: "R" });
+        return [pos, { x: point.x - base.x, y: point.y - base.y }];
+      })) };
+    }
+    const PRESET_SHIFTS_KEY = "field-notes-preset-shifts-v1";
+    const presetShiftGames = new WeakSet();
+    let presetShifts = {};
+    try {
+      const stored = JSON.parse(localStorage.getItem(PRESET_SHIFTS_KEY) || "{}");
+      if (!stored || Array.isArray(stored) || typeof stored !== "object" || Object.entries(stored).some(([id, s]) =>
+        !E.SHIFT_PRESETS[id] || id === "custom" || !s || typeof s.mirror !== "boolean" || !s.custom ||
+        SHIFT_POS.some((pos) => !s.custom[pos] || !Number.isFinite(s.custom[pos].x) || !Number.isFinite(s.custom[pos].y)))) throw new Error("Invalid preset shifts");
+      presetShifts = stored;
+    } catch (error) { console.error("Unable to load preset shifts", error); alert("Could not load saved preset shifts. Original presets will be used."); }
+    function persistPresetShifts(next) {
+      try { localStorage.setItem(PRESET_SHIFTS_KEY, JSON.stringify(next)); }
+      catch (error) { console.error("Unable to save preset shifts", error); alert("Could not save preset changes. Your previous saved presets are unchanged."); return false; }
+      presetShifts = next;
+      return true;
+    }
+    function editShift(spec) {
+      const cur = game.shifts[1 - game.half];
+      applyShift({ ...spec, preset: cur.preset, edited: cur.preset !== "custom" });
     }
     const shiftPoint = (pos, spec) => {
       const base = E.defaultSpot(pos, game.park), offset = spec.custom[pos] || { x: 0, y: 0 };
@@ -1724,6 +1748,12 @@
     }
 
     function renderShift() {
+      if (!presetShiftGames.has(game)) {
+        game.shifts.forEach((spec, team) => {
+          if (presetShifts[spec.preset]) E.setShift(game, team, presetShifts[spec.preset]);
+        });
+        presetShiftGames.add(game);
+      }
       const team = 1 - game.half;
       if (shiftTeam !== team) { selectedShift = ""; shiftTeam = team; }
       const key = `${team}|${game.over}`;
@@ -1736,8 +1766,8 @@
       row.innerHTML = `<span class="muted">${esc(game.teams[team].name)} defense:</span><select id="shift-sel">` +
         Object.entries(E.SHIFT_PRESETS).map(([id, p]) => `<option value="${id}" ${cur.preset === id ? "selected" : ""}>${esc(p.name)}</option>`).join("") +
         `</select><i class="tip" tabindex="0" data-tip="Applies from the next pitch. Pull-side shifts follow the batter's handedness.">i</i>`;
-      panel.classList.toggle("hidden", cur.preset !== "custom");
-      if (cur.preset === "custom") {
+      panel.classList.toggle("hidden", false);
+      {
         const saved = savedShifts.find((s) => s.id === selectedShift);
         panel.innerHTML = `<div class="muted">Drag the seven fielders into position, or focus one and use arrow keys. Pitcher and catcher stay fixed. Changes apply from the next pitch. Diagram shows your right-handed-batter alignment.</div>
           <svg id="shift-diagram" viewBox="0 0 600 490" role="group" aria-label="Custom defensive alignment">
@@ -1748,7 +1778,8 @@
             <text x="300" y="393" fill="#4e5b50">P</text><text x="300" y="477" fill="#4e5b50">C</text>
             ${SHIFT_POS.map((pos) => `<g data-fielder="${pos}" tabindex="0" role="button"><circle r="16" fill="#3277a7" stroke="#fff" stroke-width="2"/><text y="4" fill="#fff">${pos}</text><title>Drag ${pos} to position</title></g>`).join("")}
           </svg>
-          <label style="margin:8px 0;flex-direction:row;align-items:center"><input type="checkbox" id="shift-mirror" ${cur.mirror ? "checked" : ""}> Mirror offsets vs lefty batters</label>
+          <label style="margin:8px 0;flex-direction:row;align-items:center"><input type="checkbox" id="shift-mirror" ${shiftSpec().mirror ? "checked" : ""}> Mirror offsets vs lefty batters</label>
+          ${cur.preset !== "custom" ? `<div class="row"><b>${esc(E.SHIFT_PRESETS[cur.preset].name)}</b><button data-shift-act="save-preset">Save preset changes</button><button data-shift-act="reset-preset">Reset preset</button></div><div class="muted">Saved preset changes apply to both teams and future games in this browser. Editing Auto saves a fixed alignment instead of automatic positioning.</div>` : ""}
           <div class="row"><label>Saved shifts<select id="saved-shift"><option value="">Choose a saved shift</option>${savedShifts.map((s) => `<option value="${esc(s.id)}" ${s.id === selectedShift ? "selected" : ""}>${esc(s.name)}</option>`).join("")}</select></label>
           <label>Shift name<input id="shift-name" type="text" value="${esc(saved?.name || "")}" placeholder="e.g. Deep pull"></label>
           <button data-shift-act="save">Save as new</button><button data-shift-act="update" ${saved ? "" : "disabled"}>Update saved</button>
@@ -1833,12 +1864,12 @@
     $("shift-row").addEventListener("change", (e) => {
       if (e.target.id !== "shift-sel") return;
       const previous = game.shifts[1 - game.half];
-      applyShift({ preset: e.target.value, custom: previous?.custom || {}, mirror: !!previous?.mirror });
+      applyShift({ preset: e.target.value, custom: previous?.custom || {}, mirror: !!previous?.mirror, ...(presetShifts[e.target.value] || {}) });
       selectedShift = "";
       shiftKey = ""; renderShift();
     });
     $("shift-custom").addEventListener("change", (e) => {
-      if (e.target.id === "shift-mirror") applyShift({ ...shiftSpec(), mirror: e.target.checked });
+      if (e.target.id === "shift-mirror") editShift({ ...shiftSpec(), mirror: e.target.checked });
       if (e.target.id === "saved-shift") {
         selectedShift = e.target.value;
         const saved = savedShifts.find((s) => s.id === selectedShift);
@@ -1850,6 +1881,17 @@
       const button = e.target.closest("[data-shift-act]");
       if (!button) return;
       const act = button.dataset.shiftAct, name = $("shift-name").value.trim();
+      if (act === "save-preset" || act === "reset-preset") {
+        const preset = game.shifts[1 - game.half].preset;
+        const next = { ...presetShifts };
+        if (act === "save-preset") next[preset] = { ...shiftSpec(), preset, edited: true };
+        else delete next[preset];
+        if (persistPresetShifts(next)) {
+          if (act === "reset-preset") applyShift({ preset, custom: {}, mirror: false });
+          shiftKey = ""; renderShift();
+        }
+        return;
+      }
       if (act !== "delete" && !name) { alert("Enter a name for this shift."); $("shift-name").focus(); return; }
       let id = selectedShift, next;
       if (act === "save") {
@@ -1863,7 +1905,7 @@
     function moveShiftMarker(pos, x, y) {
       const base = E.defaultSpot(pos, game.park), spec = shiftSpec();
       spec.custom[pos] = { x: x - base.x, y: y - base.y };
-      E.setShift(game, 1 - game.half, spec);
+      editShift(spec);
       redrawShift();
     }
     $("shift-custom").addEventListener("pointerdown", (e) => {
@@ -2763,7 +2805,7 @@
       post({ type: "gm-park", park: s.park });
       const half = s.half === undefined ? game.half : s.half;
       const colors = { field: game.teams[1 - half].color, bat: game.teams[half].color };
-      post({ type: "gm-scene", fielders, runners, colors, batter: game.over && !snap ? null : { name: lastName(s.batter), height: s.batterHeight || 72, weight: s.batterWeight || 200 } });
+      post({ type: "gm-scene", fielders, runners, colors, batter: game.over && !snap ? null : { name: lastName(s.batter), height: s.batterHeight || 72, weight: s.batterWeight || 200, side: s.batterSide || "R" } });
     }
 
     const RESULT_COLOR = { out: "#758079", single: "#29845e", double: "#3277a7", triple: "#8c63a9", "home run": "#d27637" };

@@ -36,6 +36,23 @@ vm.runInContext(`
   ${html.slice(html.indexOf('      function zoomCamera('), html.indexOf('      function panCameraByPixels('))}
 `, context);
 function run(code) { return vm.runInContext(code, context); }
+const engine = require('./game-engine.js');
+for (const [full, expected] of [
+  ['Elly De La Cruz','De La Cruz'],['De La Cruz','De La Cruz'],
+  ['Bryan De La Cruz','De La Cruz'],['Jacob deGrom','deGrom'],
+  ['Travis d\'Arnaud',"d'Arnaud"],['Bobby Witt Jr.','Witt Jr.'],
+  ['Vladimir Guerrero Jr.','Guerrero Jr.'],['John De La Cruz III','De La Cruz III'],
+  ['Lars Nootbaar','Nootbaar'],['Christian Encarnacion-Strand','Encarnacion-Strand'],
+  ['Ludwig van Beethoven','van Beethoven'],['  Elly   De La Cruz  ','De La Cruz'],
+  ['Prince','Prince'],['',''],[null,'']
+]) {
+  assert.equal(engine.shortName(full),expected,'Engine field label retains complete surname');
+  assert.equal(run(`shortName(${JSON.stringify(full)})`),expected,'Renderer field label matches engine');
+  assert.equal(run(`shortName(${JSON.stringify(expected)})`),expected,'Already-shortened replay names remain intact');
+}
+assert.equal(run('batterPosition({side:"L"}).x'),3.2,'Left-handed hitter stands right of home plate');
+assert.equal(run('batterPosition({side:"R"}).x'),-3.2,'Right-handed hitter stands left of home plate');
+assert.equal(run('batterPosition(null).x'),-3.2,'Missing legacy side retains right-handed position');
 function update(mode, frames = 120) {
   run(`setGameCamera("${mode}");`);
   for (let i = 0; i < frames; i += 1) {
@@ -57,6 +74,18 @@ for (const mode of ['action', 'ball', 'runner', 'high', 'first', 'third']) {
   assert(Object.values(camera).every(Number.isFinite), `${mode}: finite idle view`);
 }
 assert.deepEqual(update('free'), { yaw: 0.2, elevation: 0.62, scale: 1.05, targetX: 12, targetY: 24 });
+for (const mode of ['action','high','first','third']) {
+  const original=update(mode,360).scale;
+  run('zoomCamera(1.5);');
+  assert.equal(run('gameCameraMode'),mode,`${mode}: zoom in preserves mode`);
+  assert(Math.abs(update(mode,360).scale-original*1.5)<1e-6,`${mode}: zoom survives automatic camera updates`);
+  update('free');
+  assert(Math.abs(update(mode,360).scale-original*1.5)<1e-6,`${mode}: zoom survives switching modes`);
+  run('zoomCamera(1/1.5);');
+  assert.equal(run('gameCameraMode'),mode,`${mode}: zoom out preserves mode`);
+  assert(Math.abs(update(mode,360).scale-original)<1e-6,`${mode}: zoom out restores scale`);
+}
+update('free');
 run(`gameState.live = { trail: [], frame: {
   fielders: [],
   t: 0,

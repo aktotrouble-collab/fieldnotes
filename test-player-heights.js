@@ -87,6 +87,21 @@ const scene = sceneMessages.find((message) => message.type === 'gm-scene');
 assert.equal(scene.batter.weight, 165, 'Recorded scenes preserve batter weight');
 assert.equal(scene.fielders.find((p) => p.pos === 'P').weight, 225);
 assert(scene.fielders.filter((p) => p.pos !== 'P').every((p) => p.weight === 240), 'Recorded scenes preserve fielder weights');
+for (const bats of ['R','L','S']) {
+  for (const throws of ['R','L']) {
+    E.currentBatter(game).bats=bats;
+    E.currentPitcher(game).throws=throws;
+    sceneMessages.length=0;
+    vm.runInNewContext(
+      gameHtml.slice(gameHtml.indexOf('    function takeSnap('),gameHtml.indexOf('    function beginRec('))+
+      gameHtml.slice(gameHtml.indexOf('    function sendScene('),gameHtml.indexOf('    const RESULT_COLOR'))+
+      '\nsendScene(JSON.parse(JSON.stringify(takeSnap())));',sceneContext
+    );
+    const expected=bats==='S'?(throws==='L'?'R':'L'):bats;
+    assert.equal(sceneMessages.find(m=>m.type==='gm-scene').batter.side,expected,
+      `${bats} hitter against ${throws} pitcher: recorded scene preserves actual batting side`);
+  }
+}
 const visualOnly = (weight) => {
   const away = E.generateTeam('Away', 'balanced', 101), home = E.generateTeam('Home', 'balanced', 102);
   for (const team of [away, home]) for (const p of [...team.lineup, ...team.bench, ...team.pitchers]) p.weight = weight;

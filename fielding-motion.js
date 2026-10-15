@@ -19,7 +19,8 @@
     const duration = kind === 'jump' ? 0.7 + ability.jump * 0.08 : 0.65;
     const lead = duration / 2 - ability.timing;
     return {
-      kind, start: time - lead, contact: time, end: time + duration / 2 + ability.recovery,
+      kind, start: time - lead, contact: time,
+      end: kind === 'jump' ? time - lead + duration : time + duration / 2 + ability.recovery,
       duration, height: ability.jump, distance: ability.dive, dx, dy
     };
   }

@@ -29,12 +29,14 @@
   };
 
   const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
-  // Last name, keeping a generational suffix ("Witt Jr.").
+  // Keep surname particles and generational suffixes in field labels.
   function shortName(full) {
     if (!full) return '';
     const parts = String(full).trim().split(/\s+/);
-    const last = parts.pop();
-    return parts.length && /^(jr\.?|sr\.?|ii|iii|iv|v)$/i.test(last) ? parts.pop() + ' ' + last : last;
+    let start = parts.length - 1;
+    if (start > 0 && /^(jr\.?|sr\.?|ii|iii|iv|v)$/i.test(parts[start])) start -= 1;
+    while (start > 0 && /^(de|del|della|di|da|das|do|dos|du|la|las|le|los|van|von|der|den|ten|ter|vel|st\.?)$/i.test(parts[start - 1])) start -= 1;
+    return parts.slice(start).join(' ');
   }
 
   function makeRng(seed) {
@@ -836,45 +838,55 @@
   function fieldBall(ball, fielders, opts = {}) {
     const pts = ball.pts;
     const last = opts.airOnly ? Math.min(ball.firstLand - 1, ball.wallHit < 0 ? pts.length - 1 : ball.wallHit - 1) : pts.length - 1;
-    for (let index = 1; index <= last; index += 1) {
-      const point = pts[index];
-      if (opts.region && !opts.region(point)) continue;
-      let best = null;
-      let bestNeed = Infinity;
-      let bestPlan = null;
-      for (const fielder of fielders) {
-        const plan = fieldingPlan(fielder, point);
-        if (plan && plan.need < bestNeed) {
-          bestNeed = plan.need;
-          best = fielder;
-          bestPlan = plan;
+    function intercept(standingOnly, limit = last) {
+      for (let index = 1; index <= limit; index += 1) {
+        const point = pts[index];
+        if (opts.region && !opts.region(point)) continue;
+        let best = null;
+        let bestNeed = Infinity;
+        let bestPlan = null;
+        for (const fielder of fielders) {
+          const plan = fieldingPlan(fielder, point, standingOnly);
+          if (plan && plan.need < bestNeed) {
+            bestNeed = plan.need;
+            best = fielder;
+            bestPlan = plan;
+          }
+        }
+        if (bestNeed <= point.t) {
+          const air = index < ball.firstLand && (ball.wallHit < 0 || index < ball.wallHit);
+          return { f: best, index, t: point.t, x: point.x, y: point.y, z: point.z, air, body: bestPlan.body, move: bestPlan.move };
         }
       }
-      if (bestNeed <= point.t) {
-        const air = index < ball.firstLand && (ball.wallHit < 0 || index < ball.wallHit);
-        return { f: best, index, t: point.t, x: point.x, y: point.y, z: point.z, air, body: bestPlan.body, move: bestPlan.move };
-      }
+      return null;
     }
-    if (opts.airOnly) return null;
-    const rest = pts[pts.length - 1];
-    let best = null;
-    let bestNeed = Infinity;
-    for (const fielder of fielders) {
-      const need = fielder.fp.react + fieldTime(fielder.fp, Math.hypot(rest.x - fielder.x, rest.y - fielder.y) - fielder.fp.reach);
-      if (need < bestNeed) {
-        bestNeed = need;
-        best = fielder;
+    let standing = intercept(true);
+    if (!standing && !opts.airOnly) {
+      const rest = pts[pts.length - 1];
+      let best = null;
+      let bestNeed = Infinity;
+      for (const fielder of fielders) {
+        const need = fielder.fp.react + fieldTime(fielder.fp, Math.hypot(rest.x - fielder.x, rest.y - fielder.y) - fielder.fp.reach);
+        if (need < bestNeed) {
+          bestNeed = need;
+          best = fielder;
+        }
       }
+      standing = { f: best, index: pts.length - 1, t: Math.max(bestNeed, rest.t), x: rest.x, y: rest.y, z: 0, air: false, body: { x: rest.x, y: rest.y }, move: null };
     }
-    return { f: best, index: pts.length - 1, t: Math.max(bestNeed, rest.t), x: rest.x, y: rest.y, z: 0, air: false, body: { x: rest.x, y: rest.y }, move: null };
+    if (standing && standing.air) return standing;
+    const active = intercept(false, standing ? standing.index : last);
+    // Leave the ground only to save a catch or beat an upright pickup after recovery.
+    if (active && (!standing || active.air || (active.move ? active.move.end : active.t) < standing.t)) return active;
+    return standing;
   }
 
-  function fieldingPlan(fielder, point) {
+  function fieldingPlan(fielder, point, standingOnly = false) {
     const dx = point.x - fielder.x, dy = point.y - fielder.y;
     const distance = Math.hypot(dx, dy);
     const ux = distance ? dx / distance : 0, uy = distance ? dy / distance : 1;
     const fp = fielder.fp;
-    for (const kind of [null, 'jump', 'dive']) {
+    for (const kind of standingOnly ? [null] : [null, 'jump', 'dive']) {
       const move = kind ? motion.action(kind, point.t, fp.ability, ux, uy) : null;
       if (move && move.start < fp.react) continue;
       const pose = motion.pose(move, point.t, fp.height);
@@ -1318,13 +1330,13 @@
     if (!shift || pos === 'P' || pos === 'C') return base;
     const hand = batter ? batSide(batter, currentPitcher(g)) : 'R';
     const pull = hand === 'L' ? 1 : -1;
-    if (shift.preset === 'auto') {
+    if (shift.preset === 'auto' && !shift.edited) {
       const a = batter ? autoOffset(g, pos, batter, hand, teamIdx) : { x: 0, y: 0 };
       return { x: base.x + a.x, y: Math.max(-3, base.y + a.y) };
     }
-    const preset = presetOffset(shift.preset, pos, pull);
-    const custom = shift.preset === 'custom' && shift.custom && shift.custom[pos] ? shift.custom[pos] : { x: 0, y: 0 };
-    const mirror = shift.preset === 'custom' && shift.mirror ? (hand === 'L' ? -1 : 1) : 1;
+    const preset = presetOffset(shift.edited ? 'none' : shift.preset, pos, pull);
+    const custom = (shift.preset === 'custom' || shift.edited) && shift.custom && shift.custom[pos] ? shift.custom[pos] : { x: 0, y: 0 };
+    const mirror = (shift.preset === 'custom' || shift.edited) && shift.mirror ? (hand === 'L' ? -1 : 1) : 1;
     return {
       x: base.x + preset.x + (Number(custom.x) || 0) * mirror,
       y: Math.max(-3, base.y + preset.y + (Number(custom.y) || 0))
@@ -1332,7 +1344,7 @@
   }
 
   function setShift(g, teamIdx, spec) {
-    g.shifts[teamIdx] = { preset: SHIFT_PRESETS[spec.preset] ? spec.preset : 'none', custom: spec.custom || {}, mirror: !!spec.mirror };
+    g.shifts[teamIdx] = { preset: SHIFT_PRESETS[spec.preset] ? spec.preset : 'none', custom: spec.custom || {}, mirror: !!spec.mirror, edited: !!spec.edited };
   }
 
   function defenseList(g) {
@@ -2843,7 +2855,7 @@
       const b = ballState;
       if (b.mode === 'held') {
         const h = b.holder;
-        return Math.max(0, transferSecs(h) - h.holdT) + flightSecs(h, dist2(h, target)) + 0.1;
+        return Math.max(0, h.transferAt - live.t) + Math.max(0, transferSecs(h) - h.holdT) + flightSecs(h, dist2(h, target)) + 0.1;
       }
       if (b.mode === 'thrown') {
         const th = b.throwing;
@@ -2854,10 +2866,10 @@
       }
       if (b.mode === 'loose') {
         const who = b.chaser || F;
-        const wait = b.pickupAt != null ? Math.max(0, b.pickupAt - live.t) : 1;
+        const wait = b.pickupAt != null ? Math.max(0, b.pickupAt - live.t, (who.move ? who.move.end : 0) - live.t) : 1;
         return wait + transferSecs(who) + flightSecs(who, dist2(b, target)) + 0.1;
       }
-      return Math.max(0, pickupAt - live.t) + transferSecs(F) + flightSecs(F, dist2({ x: fr.x, y: fr.y }, target)) + 0.1;
+      return Math.max(0, pickupAt - live.t, (F.move ? F.move.end : 0) - live.t) + transferSecs(F) + flightSecs(F, dist2({ x: fr.x, y: fr.y }, target)) + 0.1;
     }
 
     function sitCtx() {
@@ -2901,6 +2913,7 @@
       b.chaser = null;
       b.pickupAt = null;
       h.holdT = 0;
+      h.transferAt = Math.max(live.t, h.move ? h.move.end : 0);
       h.run = null;
       h.thinkAt = 0;
       h.chase = false;
@@ -3282,11 +3295,11 @@
       log(`${h.pos} throws to ${base === 4 ? 'home' : base + 'B'}`);
     }
 
-    function holderLogic(dt) {
+    function holderLogic() {
       const b = ballState;
       if (b.mode !== 'held') return;
       const h = b.holder;
-      h.holdT += dt;
+      h.holdT = Math.max(0, live.t - h.transferAt);
       if (h.move && live.t < h.move.end) return;
       if (deadBall) return;
       if (h.relayTo != null) {
@@ -3434,7 +3447,7 @@
         nextPlan = live.t + 0.15;
         replan();
       }
-      holderLogic(dt);
+      holderLogic();
       runnersTick(dt);
       outChecks();
       aiRunners();
@@ -3603,7 +3616,7 @@
     settings, parkById, fenceAt, boundaryAt, wallAt, flightSim, parkEnv, makeEnv, windNow, windText, windVector, airDensity, tempFactor, PARK_TEMP, defaultSpot, shiftedSpot, setShift, SHIFT_PRESETS,
     createGame, validateTeam, stepPitch, nextPitch, playHeldContact, completeContact, completeLive, reviewLive, resumeSteal, challengeCall, pendingReview,
     simPlateAppearance, simHalfInning, simGame, stealOdds, canSteal,
-    snapshot, boxScore, sprayChartEntries, generateTeam, makeRng, contactWord, currentBatter, currentPitcher,
+    snapshot, boxScore, sprayChartEntries, generateTeam, makeRng, contactWord, currentBatter, currentPitcher, batSide,
     batterOverall, pitcherOverall, offenseOf, defenseOf, teamRatings, mphToVelo, veloToMph, positionPenalty, eligibleAt,
     pinchHit, pinchRun, defensiveSub, pitchingChange, shortName, supportPlan, fieldTracks, fieldSpeed, keepInside, hitDistance
       };
