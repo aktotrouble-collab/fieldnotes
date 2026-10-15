@@ -3156,6 +3156,19 @@
         }
       }
 
+      function drawTouchPopup(touch, width, height) {
+        const spot = worldToScreen({ x: touch.x, y: touch.y, z: 0 }, width, height);
+        context.font = "600 9px system-ui, sans-serif";
+        context.textAlign = "center";
+        context.textBaseline = "top";
+        context.lineWidth = 2.5;
+        context.lineJoin = "round";
+        context.strokeStyle = "rgba(255, 254, 250, .95)";
+        context.strokeText(touch.text, spot.x, spot.y + 8);
+        context.fillStyle = "#1c2a21";
+        context.fillText(touch.text, spot.x, spot.y + 8);
+      }
+
       // True when an opaque wall (outfield fence or foul-territory wall) sits between the camera and the point (orthographic line of sight).
       function fenceHides(point) {
         const park = selectedPark();
@@ -3582,17 +3595,7 @@
         context.strokeStyle = "#2b3a31";
         context.stroke();
         }
-        if (frame.label && frame.landing) {
-          const spot = worldToScreen({ x: frame.landing.x, y: frame.landing.y, z: 0 }, width, height);
-          context.font = "700 13px system-ui, sans-serif";
-          context.textAlign = "center";
-          context.textBaseline = "alphabetic";
-          context.lineWidth = 4;
-          context.strokeStyle = "rgba(255, 254, 250, .95)";
-          context.strokeText(frame.label, spot.x, spot.y - 12);
-          context.fillStyle = "#1c2a21";
-          context.fillText(frame.label, spot.x, spot.y - 12);
-        }
+        if (frame.touch && frame.t >= frame.touch.t) drawTouchPopup(frame.touch, width, height);
         if (frame.replay || frame.done) return;
 
         // interactive chips
@@ -3800,19 +3803,7 @@
           let index = 0;
           while (index < last && flying[index].t < elapsed) index += 1;
           const tip = flying[index];
-          const revealT = typeof play.revealAt === "number" ? play.revealAt : flying[last].t;
-          if (elapsed >= revealT && play.label) {
-            const spot = worldToScreen({ x: play.landing.x, y: play.landing.y, z: 0 }, width, height);
-            context.font = "700 13px system-ui, sans-serif";
-            context.textAlign = "center";
-            context.textBaseline = "alphabetic";
-            context.lineWidth = 4;
-            context.lineJoin = "round";
-            context.strokeStyle = "rgba(255, 254, 250, .95)";
-            context.strokeText(play.label, spot.x, spot.y - 12);
-            context.fillStyle = "#1c2a21";
-            context.fillText(play.label, spot.x, spot.y - 12);
-          }
+          if (play.touch && elapsed >= play.touch.t) drawTouchPopup(play.touch, width, height);
           const trace = (project, color, alpha, lineWidth) => {
             context.beginPath();
             let pen = false;
@@ -3835,6 +3826,7 @@
             context.globalAlpha = 1;
           };
           trace((p) => ({ x: p.x, y: p.y, z: 0 }), "#1c2a21", 0.16, 2);
+          const revealT = typeof play.revealAt === "number" ? play.revealAt : flying[last].t;
           trace((p) => p, elapsed >= revealT ? play.color : "#3a4a40", 1, 1.6);
           const ballPoint = (() => {
             const inHand = { x: tip.x, y: tip.y, z: Math.max(tip.z, 3) };
@@ -3966,7 +3958,7 @@
             start: performance.now(),
             points,
             color: data.color || "#d27637",
-            label: data.label || "",
+            touch: data.touch || null,
             landing: data.landing || { x: last.x, y: last.y },
             fielder: data.fielder || null,
             throws: data.throws || [],

@@ -302,7 +302,7 @@
   // Straight-line flight along `dir` degrees. Returns time-stamped points (feet, seconds).
   // opts.spin = { b: backspin, s: sidespin (+ curves toward right field) }, opts.rho = air density ratio,
   // opts.wind = { x, y } mph in field coordinates.
-  const settings = { foulOver: false };
+  const settings = { foulOver: false, hrStop: false };
 
   function flightSim(ev, la, dir, park, opts = {}) {
     const dt = 1 / 120;
@@ -1775,8 +1775,21 @@
 
   /* ------------------------------------------------------------ play application */
 
+  // Where the ball first touches the ground (or would have, without the wall). Home runs keep
+  // their full flight in fullPts so they can play out past the fence.
+  function markTouch(ball, openFlight) {
+    const walled = ball.hr || (ball.wallHit >= 0 && ball.wallHit < ball.firstLand);
+    const open = walled ? openFlight() : null;
+    const land = open ? open.landing : ball.landing;
+    const at = open && !ball.hr ? ball.pts[ball.wallHit] : land;
+    ball.touch = { x: at.x, y: at.y, t: at.t, d: land.d };
+    if (open && !ball.hr) ball.airWall = open.landing;
+    if (ball.hr) ball.fullPts = open.pts.slice(0, open.firstLand + 90);
+  }
+
   // Hit distance: where the ball first touched down, or would have if the wall hadn't stopped it.
   function hitDistance(ball, result) {
+    if (ball.touch) return ball.touch.d;
     if (ball.hr) return result.distance;
     const caught = result.airOut || (result.kind === 'out' && result.air);
     if (ball.la >= 10 && !caught) return ball.hitDist != null ? ball.hitDist : ball.landing.d;
@@ -1913,7 +1926,7 @@
     return finishBall(g, pa, event, ball, result);
   }
 
-  // Opens a challenge window for close or wrong calls that hurt a human-controlled team.
+  // Opens a challenge window for any call that hurt a human-controlled team.
   function reviewLive(g, opts) {
     const pending = g.pendingLive;
     if (!pending) return null;
@@ -1922,8 +1935,7 @@
     setReview(g, 'live', calls);
     const open = pendingReview(g, opts);
     if (!open) return null;
-    open.calls = open.calls.filter((c) => calls.find((x) => x.id === c.id).window);
-    return open.calls.length ? open : null;
+    return open;
   }
   function finishPA(g, pa, outcome) {
     const team = battingTeam(g);
@@ -2036,9 +2048,10 @@
           leverage: 0.6
         };
         setReview(g, 'ff', [call]);
-        if (opts.hold && edge <= 1.5 && humanHurt(g, call, opts)) {
+        if (opts.hold && humanHurt(g, call, opts)) {
           pa.held = { stage: 'ff', pitch, swing, event, ballInPlay, foulBall, ff, review: g.review };
           event.held = 'ff';
+          event.heldFlight = markTouch(probe, () => flightOf(contact, { noFence: true })) || probe;
           return event;
         }
       }
@@ -2068,6 +2081,7 @@
         });
         if (caught && rng.chance(fieldingErrorP(caught.f, true))) caught = null;
         if (caught) {
+          markTouch(flight, () => flightOf(foulBall, { noFence: true }));
           event.call = 'foul popup caught';
           event.text = `${label}: foul popup caught by ${caught.f.pos}.`;
           event.foul = { ...flight, pts: flight.pts.filter((p) => p.t < caught.t) };
@@ -2078,6 +2092,7 @@
       }
       event.call = 'foul';
       event.foul = flightOf(foulBall);
+      markTouch(event.foul, () => flightOf(foulBall, { noFence: true }));
       event.foulEdge = Math.abs(Math.abs(event.foul.landAngle) - foulLimit(g.park, event.foul.landAngle));
       if (g.count.strikes < 2) g.count.strikes += 1;
     }
@@ -2088,11 +2103,9 @@
         const grab = fieldBall(ball, defenseList(g));
         if (grab.index < ball.pts.length - 1) ball.grd = false;
       }
-      if (ball.hr) ball.hrDistance = flightOf(ballInPlay, { noFence: true }).landing.d;
-      else if (ball.wallHit >= 0 && ball.wallHit < ball.firstLand) {
-        ball.airWall = flightOf(ballInPlay, { noFence: true }).landing;
-        ball.hitDist = ball.airWall.d;
-      }
+      markTouch(ball, () => flightOf(ballInPlay, { noFence: true }));
+      if (ball.hr) ball.hrDistance = ball.touch.d;
+      else if (ball.airWall) ball.hitDist = ball.airWall.d;
       ball.wind = ballInPlay.wind;
       ball.spin = ballInPlay.spin;
       event.call = 'in play';

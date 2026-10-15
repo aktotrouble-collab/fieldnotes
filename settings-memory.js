@@ -4,7 +4,7 @@
   const KEY = `field-notes-settings-v2:${page}`;
   // Entity pickers and one-off fields whose options/values belong to the current data, not to a preference.
   const SKIP = new Set([
-    "import-file", "add-park-select", "batter", "game-date", "sim-date", "seed", "help-toggle", "foul-stop", "stadium-select",
+    "import-file", "add-park-select", "batter", "game-date", "sim-date", "seed", "help-toggle", "foul-stop", "hr-stop", "stadium-select",
     "shift-sel", "ph-sel", "pc-sel", "ds-slot", "ds-bench", "log-inning", "sch-team", "st-team", "st-q", "p-q",
     "tm-sel", "tm-name", "tm-abbr", "tm-color", "tm-park", "ns-label", "lg-name", "lg-my", "d-my", "d-name", "d-seed", "p-reseed"
   ]);

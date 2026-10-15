@@ -125,11 +125,6 @@
     .log div.replayable:hover { background:#eef5ee; }
     .log .sendchart { float:right; padding:0 7px; font-size:11px; line-height:18px; border-radius:6px; margin-left:8px; color:var(--blue); }
     .log .sendchart:disabled { color:var(--mute); cursor:default; }
-    #umpbar { position:absolute; left:50%; bottom:10px; transform:translateX(-50%); display:none; align-items:center; gap:10px; padding:7px 12px; border-radius:10px; background:rgba(14,24,20,.9); color:#fff; font-size:13px; box-shadow:0 4px 16px rgba(0,0,0,.35); z-index:5; }
-    #umpbar.on { display:flex; }
-    #umpbar .tbar { width:90px; height:6px; border-radius:3px; background:rgba(255,255,255,.2); overflow:hidden; }
-    #umpbar .tbar i { display:block; height:100%; background:#f2c14e; width:100%; }
-    #umpbar button { background:#f2c14e; border-color:#f2c14e; color:#1f2a24; font-weight:600; }
     #chal-menu { position:absolute; left:50%; bottom:56px; transform:translateX(-50%); display:none; flex-direction:column; gap:6px; padding:10px; min-width:260px; border-radius:10px; background:rgba(255,253,247,.97); border:1px solid var(--line); box-shadow:0 6px 22px rgba(0,0,0,.3); z-index:6; }
     #chal-menu.on { display:flex; }
     #btn-challenge.lit { border-color:#f2c14e; color:#1f2a24; background:linear-gradient(90deg,#f2c14e calc(var(--lit,1)*100%),#fffefa 0); box-shadow:0 0 10px rgba(242,193,78,.9); }
@@ -161,7 +156,7 @@
   <script>if (localStorage.getItem("field-notes-help-v1") === "off") document.documentElement.classList.add("no-help");</script>
   <header>
     <div><strong>Field Notes</strong><span>Game mode</span></div>
-    <div style="display:flex;gap:16px;align-items:center"><label class="help-toggle" title="When on, foul balls that clear the foul wall stop there. Turn off to watch them fly."><input type="checkbox" id="foul-stop"> Stop fouls</label><label class="help-toggle" title="Show or hide the small i hints next to settings"><input type="checkbox" id="help-toggle"> Show hints</label><a href="league.html" target="_blank">League</a><a href="index.html">&larr; Spray chart</a></div>
+    <div style="display:flex;gap:16px;align-items:center"><label class="help-toggle" title="When on, foul balls that clear the foul wall stop there. Turn off to watch them fly."><input type="checkbox" id="foul-stop"> Stop fouls</label><label class="help-toggle" title="When on, home runs stop at the fence. Turn off to watch them fly all the way down."><input type="checkbox" id="hr-stop"> Stop home runs</label><label class="help-toggle" title="Show or hide the small i hints next to settings"><input type="checkbox" id="help-toggle"> Show hints</label><a href="league.html" target="_blank">League</a><a href="index.html">&larr; Spray chart</a></div>
   </header>
   <main>
     <section id="setup">
@@ -248,7 +243,6 @@
             <div id="field-wrap">
               <iframe id="field-frame" title="3D field" src="index.html?embed=1&amp;game=1&amp;park=dodgers" style="width:100%;height:clamp(640px,78vh,960px);border:0;border-radius:8px;display:block"></iframe>
               <div id="bug"></div>
-              <div id="umpbar"><span id="ump-text"></span><div class="tbar"><i id="ump-bar"></i></div><button id="ump-btn">Challenge</button></div>
               <div id="chal-menu"></div>
               <div id="zone-mini"><canvas id="zone-mini-canvas" width="340" height="400"></canvas></div>
               <div id="zone-overlay">
@@ -342,6 +336,17 @@
         stop.addEventListener("change", () => {
           if (window.GameEngine) window.GameEngine.settings.foulOver = !stop.checked;
           try { localStorage.setItem("field-notes-foulstop-v1", stop.checked ? "on" : "off"); } catch (error) { /* ignore */ }
+        });
+      }
+      const hrStop = document.getElementById("hr-stop");
+      if (hrStop) {
+        let on = true;
+        try { on = localStorage.getItem("field-notes-hrstop-v1") !== "off"; } catch (error) { /* ignore */ }
+        hrStop.checked = on;
+        window.addEventListener("load", () => { if (window.GameEngine) window.GameEngine.settings.hrStop = !!on; });
+        hrStop.addEventListener("change", () => {
+          if (window.GameEngine) window.GameEngine.settings.hrStop = !!hrStop.checked;
+          try { localStorage.setItem("field-notes-hrstop-v1", hrStop.checked ? "on" : "off"); } catch (error) { /* ignore */ }
         });
       }
       const toggle = document.getElementById("help-toggle");
@@ -1664,7 +1669,6 @@
     function resetUmpUI() {
       if (chal) { clearTimeout(chal.timer); cancelAnimationFrame(chal.raf); }
       chal = null;
-      $("umpbar").classList.remove("on");
       $("btn-challenge").classList.remove("lit");
       $("chal-menu").classList.remove("on");
     }
@@ -1693,16 +1697,9 @@
       cancelAnimationFrame(chal.raf);
       $("chal-menu").classList.remove("on");
       $("btn-challenge").classList.remove("lit");
-      if (result) {
-        $("ump-text").textContent = result.note;
-        $("ump-btn").classList.add("hidden");
-        $("umpbar").classList.add("on");
-      }
-      setTimeout(() => {
-        $("umpbar").classList.remove("on");
-        chal = null;
-        done();
-      }, result ? 1500 : 0);
+      chal = null;
+      done();
+      if (result) $("banner").textContent = result.note;
     }
 
     function renderChallengeMenu() {
@@ -1734,7 +1731,6 @@
     }
 
     $("btn-challenge").addEventListener("click", () => { if (chal && !chal.closing) renderChallengeMenu(); });
-    $("ump-btn").addEventListener("click", () => { if (chal && !chal.closing) renderChallengeMenu(); });
     $("chal-menu").addEventListener("click", (e) => {
       if (e.target.closest("[data-cancel]")) return closeChallenge(null);
       const button = e.target.closest("[data-chal]");
@@ -1891,7 +1887,34 @@
     }
 
     const hideMini = () => $("zone-mini").classList.remove("on");
+    function skipAnimation() {
+      if (chal && !chal.closing) closeChallenge(null);
+      if (phase === "swinging" && timing && timing.outcome) {
+        const out = timing.outcome;
+        timing = null;
+        holdView = false;
+        settle(out.event, out.rec);
+      }
+      if (liveRun && phase === "live") {
+        const run = liveRun;
+        liveRun = null;
+        for (let i = 0; i < 20000 && !run.live.done; i += 1) run.live.step(1 / 120);
+        concludeLive(run, { human: humanFlags() });
+      }
+      if (holdView) {
+        if (!$("btn-skip").classList.contains("hidden")) endClips();
+        clearTimeout(revealTimer);
+        clearTimeout(hrTimer);
+        holdView = false;
+        if (pendingBanner) $("banner").textContent = pendingBanner;
+        pendingBanner = "";
+        $("pitch-result").textContent = "";
+        refresh();
+      }
+    }
+
     $("btn-pitch").addEventListener("click", () => {
+      if (game && !game.over && (holdView || ["challenge", "swinging", "live"].includes(phase))) skipAnimation();
       if (!game || game.over || phase !== "ready" || holdView) return;
       hideMini();
       clearTimeout(autoTimer);
@@ -1932,7 +1955,21 @@
         };
         if (review) {
           phase = "challenge";
-          return openChallenge(review, event.held === "abs" ? 1 : 8, resume);
+          const open = () => openChallenge(review, event.held === "abs" ? 5 : 6, resume);
+          if (event.held === "abs") {
+            const strike = /strike/.test(review.calls[0].label);
+            const el = $("pitch-result");
+            el.textContent = strike ? "STRIKE" : "BALL";
+            el.dataset.kind = strike ? "s" : "b";
+            return open();
+          }
+          if (event.held === "ff" && event.heldFlight) {
+            holdView = true;
+            const ms = playFoul(event.heldFlight, rec, {}, false);
+            refresh();
+            return void (revealTimer = setTimeout(() => { holdView = false; open(); }, ms));
+          }
+          return open();
         }
         return resume();
       }
@@ -2021,14 +2058,12 @@
       const points = flight.pts.map((p) => ({ t: p.t, x: p.x, y: p.y, z: p.z }));
       if (catchInfo) points.push({ t: catchInfo.t, x: catchInfo.x, y: catchInfo.y, z: 3 });
       const end = points.length ? points[points.length - 1].t : 3;
-      const near = event && typeof event.foulEdge === "number" && event.foulEdge <= 3;
-      const label = catchInfo ? "Out" : always || near ? "Foul" : undefined;
       const spot = catchInfo ? { x: catchInfo.x, y: catchInfo.y } : flight.landing ? { x: flight.landing.x, y: flight.landing.y } : undefined;
       post({
         type: "gm-play",
         points,
         color: catchInfo ? "#758079" : "#9aa59d",
-        label,
+        touch: touchInfo(flight),
         landing: spot,
         fielder: catchInfo ? { pos: catchInfo.pos, x: catchInfo.x, y: catchInfo.y, t: catchInfo.t } : null,
         throws: [],
@@ -2400,12 +2435,15 @@
 
     function stopAnim() {}
 
+    const hrStop = () => !!($("hr-stop") && $("hr-stop").checked);
+    const touchInfo = (ball) => (ball && ball.touch ? { x: ball.touch.x, y: ball.touch.y, t: ball.touch.t, text: `${Math.round(ball.ev)} / ${Math.round(ball.la)}° / ${Math.round(E.hitDistance(ball, {}))} ft` } : undefined);
+
     function playBall(ball, play, snap, pitch, isReplay) {
       clearZoneNow();
       clearTimeout(sceneTimer);
       snap = snap || takeSnap();
       const spot = play && play.spot ? play.spot : null;
-      const distance = Math.round(play && !ball.hr ? E.hitDistance(ball, play) : ball.hr ? (ball.hrDistance || ball.landing.d) : ball.landing.d);
+      const distance = Math.round(E.hitDistance(ball, play || {}));
       let result = "out";
       if (ball.hr) result = "home run";
       else if (play && play.kind === "hit") result = ["out", "single", "double", "triple", "home run"][play.hitBases] || "single";
@@ -2423,7 +2461,7 @@
       }
       sendScene(snap);
       const fielded = !!(play && play.fielder && spot && !ball.hr && defenders.includes(play.fielder.pos));
-      let points = ball.pts.map((point) => ({ t: point.t, x: point.x, y: point.y, z: point.z }));
+      let points = (ball.hr && ball.fullPts && !hrStop() ? ball.fullPts : ball.pts).map((point) => ({ t: point.t, x: point.x, y: point.y, z: point.z }));
       if (fielded) {
         const cut = Math.max(0.5, play.time || 2);
         points = points.filter((point) => point.t < cut);
@@ -2447,7 +2485,7 @@
         points,
         revealAt,
         color: RESULT_COLOR[result],
-        label,
+        touch: touchInfo(ball),
         landing: fielded ? { x: spot.x, y: spot.y } : ball.landing ? { x: ball.landing.x, y: ball.landing.y } : undefined,
         fielder: fielded ? { pos: play.fielder.pos, x: spot.x, y: spot.y, t: Math.max(0.5, play.time || 2) } : null,
         throws: throwList,
@@ -2455,9 +2493,7 @@
         tracks,
         lead: preRoll(pitch)
       });
-      const bannerText = `${Math.round(ball.ev)} mph · ${Math.round(ball.la)}° · ${label}`;
-      if (isReplay) $("banner").textContent = bannerText;
-      else { $("banner").innerHTML = "&nbsp;"; pendingBanner = bannerText; }
+      if (!isReplay) $("banner").innerHTML = "&nbsp;";
       if (isReplay) sceneTimer = setTimeout(() => { if (phase === "ready") sendScene(); }, 9000);
       const flightEnd = points.length ? points[points.length - 1].t : 3;
       const runEnd = runners.reduce((m, r) => Math.max(m, r.delay + r.perBase * (r.to - r.from)), 0);
@@ -2474,7 +2510,7 @@
 
     const resultLabel = (ball, play) => {
       const spot = play && play.spot ? play.spot : null;
-      const distance = Math.round(play ? E.hitDistance(ball, play) : ball.landing.d);
+      const distance = Math.round(E.hitDistance(ball, play || {}));
       let result = "out";
       if (play && play.kind === "hit") result = ["out", "single", "double", "triple", "home run"][play.hitBases] || "single";
       return {
@@ -2490,7 +2526,7 @@
       phase = "live";
       liveAdd = 0;
       timing = null;
-      liveRun = { event, rec, live: event.live, frames: [], acc: 0, steps: 0, last: performance.now(), extra: { color: "#d27637" }, pre: 0, preLen: preRoll(rec && rec.pitch) };
+      liveRun = { event, rec, live: event.live, frames: [], acc: 0, steps: 0, last: performance.now(), extra: { color: "#d27637", touch: touchInfo(event.ball) }, pre: 0, preLen: preRoll(rec && rec.pitch) };
       refresh();
       requestAnimationFrame(liveTick);
     }
@@ -2539,8 +2575,7 @@
       const review = E.reviewLive(game, opts);
       if (!review) return concludeLive(run, opts);
       phase = "challenge";
-      loopChallenge(run.frames);
-      openChallenge(review, 8, () => concludeLive(run, opts));
+      openChallenge(review, 6, () => concludeLive(run, opts));
     }
 
     // Replay the play on a loop while the challenge window is open.
@@ -2563,14 +2598,14 @@
     function concludeLive(run, opts) {
       const event = E.completeLive(game, opts);
       const info = resultLabel(event.ball, event.play);
-      run.extra = { color: info.color, label: info.text, landing: info.landing };
+      run.extra = { color: info.color, touch: touchInfo(event.ball) };
       const last = { ...liveFrame(run.extra, run), done: true };
       run.frames.push(last);
       post({ type: "gm-frame", frame: last });
       phase = "ready";
       liveAdd = 0;
       lastBall = record(event, run.rec || beginRec({ mph: 92, type: "FB" }), run.frames, run.extra);
-      $("banner").textContent = `${Math.round(event.ball.ev)} mph · ${Math.round(event.ball.la)}° · ${info.text}`;
+      $("banner").innerHTML = "&nbsp;";
       refresh();
       sceneTimer = setTimeout(() => { if (!liveRun) sendScene(); }, 2200);
     }
@@ -2678,7 +2713,7 @@
       const curSnap = E.snapshot(game);
       const isHuman = human();
       const awaiting = phase === "await";
-      const busy = phase !== "ready" || holdView;
+      const busy = (phase !== "ready" && !(phase === "challenge" && chal && !chal.closing)) || holdView;
       if (!holdView || clipView) {
       const game = viewGame();
       const snap = clipView ? clipView.snap : curSnap;
@@ -2711,7 +2746,7 @@
       // log
       renderLog();
       }
-      $("btn-pitch").disabled = game.over || busy;
+      $("btn-pitch").disabled = game.over;
       const pm = game.over ? "sim" : pitchMode();
       $("btn-pitch").textContent = pm !== "sim" ? "Pitch" : isHuman ? (mode() === "timing" ? "Next pitch (then swing)" : "Next pitch") : "Next pitch";
       for (const id of ["btn-pa", "btn-half", "btn-game"]) $(id).disabled = game.over || busy;
