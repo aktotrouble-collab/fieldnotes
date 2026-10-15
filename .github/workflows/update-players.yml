@@ -18,16 +18,18 @@ jobs:
           node-version: 20
       - name: Rebuild players-data.js
         run: node build-players.js
+      - name: Refresh all listed player heights and weights
+        run: node build-players.js --measurements
       - name: Commit if changed
         run: |
           # The file's "built" date changes daily, so compare the data itself.
-          if git diff --quiet -I'"built":"[0-9-]*"' -- players-data.js; then
+          if git diff --quiet -I'"built":"[0-9-]*"' -- players-data.js player-heights.js player-weights.js seasons && [ -z "$(git ls-files --others --exclude-standard -- player-weights.js)" ]; then
             echo "No data changes."
             git checkout -- players-data.js
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add players-data.js
+          git add players-data.js player-heights.js player-weights.js seasons
           git commit -m "Update MLB player data"
           git push

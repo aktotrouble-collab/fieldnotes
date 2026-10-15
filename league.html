@@ -66,6 +66,8 @@
   <script src="park-walls.js"></script>
   <script src="foul-walls.js"></script>
   <script src="players-data.js"></script>
+  <script src="player-heights.js"></script>
+  <script src="player-weights.js"></script>
   <script src="fielding-motion.js"></script>
   <script src="game-engine.js"></script>
   <script src="league-engine.js"></script>
@@ -708,15 +710,18 @@
       const t = league.teams[ti];
       const bat = league.stats.reg.bat;
       const pit = league.stats.reg.pit;
+      const heightPlayers = [...t.roster.lineup, ...t.roster.bench, ...t.roster.rotation, ...t.roster.bullpen];
+      const heightCell = (p) => `<td><input type="number" step="any" data-player-height="${heightPlayers.indexOf(p)}" value="${GE.playerHeight(p)}" aria-label="${esc(p.name)} height in inches" title="Height in inches. 72 = 6 ft; affects figure height and catch reach."></td>`;
+      const weightCell = (p) => `<td><input type="number" step="any" data-player-weight="${heightPlayers.indexOf(p)}" value="${GE.playerWeight(p)}" aria-label="${esc(p.name)} weight in pounds" title="Weight in pounds. Adjusts icon width relative to height; visual only. No upper cap."></td>`;
       const brow = (p) => {
         const r = bat[L.pkey(t, p)];
         const d = r ? L.derivedBat(r) : null;
-        return `<tr><td class="l">${esc(p.name)}</td><td>${esc(p.pos)}</td><td>${esc(p.bats || "")}</td><td>${p.contact}</td><td>${p.power}</td><td>${p.eye}</td><td>${p.speed}</td><td>${p.arm}</td><td>${p.field}</td><td>${d ? d.g : 0}</td><td>${d ? f3(d.avg) : "-"}</td><td>${d ? d.hr : 0}</td><td>${d ? d.rbi : 0}</td><td>${d ? f3(d.ops) : "-"}</td></tr>`;
+        return `<tr><td class="l">${esc(p.name)}</td><td>${esc(p.pos)}</td><td>${esc(p.bats || "")}</td>${heightCell(p)}${weightCell(p)}<td>${p.contact}</td><td>${p.power}</td><td>${p.eye}</td><td>${p.speed}</td><td>${p.arm}</td><td>${p.field}</td><td>${d ? d.g : 0}</td><td>${d ? f3(d.avg) : "-"}</td><td>${d ? d.hr : 0}</td><td>${d ? d.rbi : 0}</td><td>${d ? f3(d.ops) : "-"}</td></tr>`;
       };
       const prow = (p) => {
         const r = pit[L.pkey(t, p)];
         const d = r ? L.derivedPit(r) : null;
-        return `<tr><td class="l">${esc(p.name)}</td><td>${esc(p.role)}</td><td>${esc(p.throws || "")}</td><td>${p.velo}</td><td>${p.control}</td><td>${p.movement}</td><td>${p.stamina}</td><td>${d ? d.g : 0}</td><td>${d ? `${d.w}-${d.l}` : "-"}</td><td>${d ? d.sv : 0}</td><td>${d ? d.ip : "0.0"}</td><td>${d ? f2(d.ra9) : "-"}</td><td>${d ? d.k : 0}</td></tr>`;
+        return `<tr><td class="l">${esc(p.name)}</td><td>${esc(p.role)}</td><td>${esc(p.throws || "")}</td>${heightCell(p)}${weightCell(p)}<td>${p.velo}</td><td>${p.control}</td><td>${p.movement}</td><td>${p.stamina}</td><td>${d ? d.g : 0}</td><td>${d ? `${d.w}-${d.l}` : "-"}</td><td>${d ? d.sv : 0}</td><td>${d ? d.ip : "0.0"}</td><td>${d ? f2(d.ra9) : "-"}</td><td>${d ? d.k : 0}</td></tr>`;
       };
       const ro = t.roster;
       el.innerHTML = `<div class="card"><div class="row"><label>Team<select id="tm-sel">${opt(league.teams.map((x, i) => [i, x.name]), ti)}</select></label>
@@ -724,11 +729,37 @@
         <label>Color<input id="tm-color" type="color" value="${esc(t.color)}"></label><label>Home park<select id="tm-park">${parkOpts(t.park)}</select></label>
         <button id="tm-save">Save</button><button id="tm-my">${myIdx() === ti ? "This is my team" : "Make this my team"}</button></div>
         <p class="note">${esc(t.league)} · ${esc(t.division)} · record ${league.rec[ti].w}-${league.rec[ti].l}</p></div>
-        <div class="card"><h2>Lineup</h2><div class="scroll"><table><thead><tr><th class="l">Player</th><th>Pos</th><th>B</th><th>CON</th><th>PWR</th><th>EYE</th><th>SPD</th><th>ARM</th><th>FLD</th><th>G</th><th>AVG</th><th>HR</th><th>RBI</th><th>OPS</th></tr></thead>
-          <tbody>${ro.lineup.map(brow).join("")}<tr><td class="l mute" colspan="14">Bench</td></tr>${ro.bench.map(brow).join("")}</tbody></table></div></div>
-        <div class="card"><h2>Pitching staff</h2><div class="scroll"><table><thead><tr><th class="l">Pitcher</th><th>Role</th><th>T</th><th>VEL</th><th>CTL</th><th>MOV</th><th>STA</th><th>G</th><th>W-L</th><th>SV</th><th>IP</th><th>RA/9</th><th>K</th></tr></thead>
+        <div class="card"><h2>Lineup</h2><p class="note">Height is editable in total inches (72 = 6 ft); weight is in pounds. Weight subtly changes icon width relative to height, not speed or catch reach. Changes are saved with this league and override automatic MLB updates.</p><div class="scroll"><table><thead><tr><th class="l">Player</th><th>Pos</th><th>B</th><th>Height (in)</th><th>Weight (lb)</th><th>CON</th><th>PWR</th><th>EYE</th><th>SPD</th><th>ARM</th><th>FLD</th><th>G</th><th>AVG</th><th>HR</th><th>RBI</th><th>OPS</th></tr></thead>
+          <tbody>${ro.lineup.map(brow).join("")}<tr><td class="l mute" colspan="16">Bench</td></tr>${ro.bench.map(brow).join("")}</tbody></table></div></div>
+        <div class="card"><h2>Pitching staff</h2><div class="scroll"><table><thead><tr><th class="l">Pitcher</th><th>Role</th><th>T</th><th>Height (in)</th><th>Weight (lb)</th><th>VEL</th><th>CTL</th><th>MOV</th><th>STA</th><th>G</th><th>W-L</th><th>SV</th><th>IP</th><th>RA/9</th><th>K</th></tr></thead>
           <tbody>${ro.rotation.concat(ro.bullpen).map(prow).join("")}</tbody></table></div></div>`;
       const g = (id) => document.getElementById(id);
+      el.querySelectorAll("[data-player-height]").forEach((input) => input.addEventListener("change", () => {
+        const height = Number(input.value);
+        if (!Number.isFinite(height) || height <= 0) {
+          input.setCustomValidity("Enter a height greater than zero inches.");
+          input.reportValidity();
+          return;
+        }
+        input.setCustomValidity("");
+        const player = heightPlayers[Number(input.dataset.playerHeight)];
+        player.height = height;
+        player.heightManual = true;
+        saveNow();
+      }));
+      el.querySelectorAll("[data-player-weight]").forEach((input) => input.addEventListener("change", () => {
+        const weight = Number(input.value);
+        if (!Number.isFinite(weight) || weight <= 0) {
+          input.setCustomValidity("Enter a weight greater than zero pounds.");
+          input.reportValidity();
+          return;
+        }
+        input.setCustomValidity("");
+        const player = heightPlayers[Number(input.dataset.playerWeight)];
+        player.weight = weight;
+        player.weightManual = true;
+        saveNow();
+      }));
       g("tm-sel").addEventListener("change", (e) => { view.teamIdx = Number(e.target.value); renderTab(); });
       g("tm-save").addEventListener("click", () => {
         t.name = g("tm-name").value.trim() || t.name;

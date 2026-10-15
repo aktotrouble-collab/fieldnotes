@@ -1,7 +1,32 @@
 // Run with node test-park-boundaries.js after regenerating the park boundaries.
 const assert = require('node:assert/strict');
 const E = require('./game-engine.js');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
 require('./park-walls.js');
+const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+function artObject(name) {
+  const start = html.indexOf(`const ${name} = {`);
+  const end = html.indexOf('\n      };', start);
+  return vm.runInNewContext(`${html.slice(start, end + 9)}\n${name};`);
+}
+const art = artObject('REFERENCE_ART'), foulWalls = artObject('FOUL_WALLS');
+for (const [id, reference] of Object.entries(art)) {
+  const foul = foulWalls[id];
+  assert.equal(JSON.stringify(foul[0]), JSON.stringify(reference.walls[0]), `${id}: left foul fence stays attached to outfield`);
+  assert.equal(JSON.stringify(foul.at(-1)), JSON.stringify(reference.walls.at(-1)), `${id}: right foul fence stays attached to outfield`);
+  const collision = globalThis.PARK_BOUNDARIES[id];
+  const outline = [...reference.walls, ...foul.slice().reverse()];
+  assert.equal(outline.length, collision.points.length);
+  outline.forEach(([x, y], i) => {
+    assert(Math.abs(collision.points[i][0] - (x - reference.homeX) / reference.pixelsPerFootX) < 1e-9);
+    assert(Math.abs(collision.points[i][1] - (reference.homeY - y) / reference.pixelsPerFootY) < 1e-9, `${id}: visible fence and collision fence agree`);
+  });
+}
+assert.equal(JSON.stringify(foulWalls['red-sox'].slice(-8)), JSON.stringify([
+  [519,489],[529,470],[539,450],[553,420],[562,401],[569,386],[574,375],[576,368]
+]), 'Fenway RF fence follows the painted field edge through and below the pole');
 
 function inside(p, polygon) {
   let yes = false;

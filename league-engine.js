@@ -69,10 +69,10 @@
 
   const toBatter = (p, pos) => ({
     name: p.name, pos, bats: p.bats, contact: p.contact, power: p.power, eye: p.eye, speed: p.speed, arm: p.arm,
-    field: p.field, risk: p.risk, loft: p.loft, mlb: p.id, natural: p.pos, alt: p.alt || []
+    field: p.field, risk: p.risk, loft: p.loft, height: GE.playerHeight(p), weight: GE.playerWeight(p), mlb: p.id, natural: p.pos, alt: p.alt || []
   });
   const toPitcher = (p, role) => ({
-    name: p.name, role, throws: p.throws, velo: p.velo, control: p.control, movement: p.movement, stamina: p.stamina, mlb: p.id
+    name: p.name, role, throws: p.throws, velo: p.velo, control: p.control, movement: p.movement, stamina: p.stamina, height: GE.playerHeight(p), weight: GE.playerWeight(p), mlb: p.id
   });
 
   /* Best lineup, bench, rotation and bullpen from one real club's players. */

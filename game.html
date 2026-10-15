@@ -76,6 +76,12 @@
     .pitchinfo { font-weight:600; min-height:20px; }
     .banner { font-size:15px; font-weight:700; }
     .hidden { display:none !important; }
+    #shift-custom { max-width:720px; padding:12px; border:1px solid var(--line); border-radius:10px; }
+    #shift-diagram { display:block; width:100%; max-height:480px; background:#dce9d2; border-radius:8px; touch-action:none; }
+    #shift-diagram [data-fielder] { cursor:grab; }
+    #shift-diagram [data-fielder]:focus { outline:none; }
+    #shift-diagram [data-fielder]:focus circle { stroke:#d27637; stroke-width:4; }
+    #shift-diagram text { font:600 12px system-ui,sans-serif; text-anchor:middle; user-select:none; }
     #field-wrap { position:relative; }
     #bug { position:absolute; left:10px; top:10px; display:flex; font:600 13px/1 system-ui,"Segoe UI",sans-serif; color:#fff; background:rgba(14,24,20,.82); border-radius:6px; box-shadow:0 3px 12px rgba(0,0,0,.35); overflow:hidden; pointer-events:none; user-select:none; }
     #bug .b-teams { display:flex; flex-direction:column; min-width:118px; }
@@ -144,6 +150,7 @@
     .roster .grip { cursor:grab; touch-action:none; user-select:none; white-space:nowrap; }
     .roster-row.dragging { background:#2f7d4f33; box-shadow:0 2px 10px rgba(0,0,0,.25); position:relative; z-index:2; }
     .roster-row:hover { background:#0000000d; }
+    .roster-row.bench-drop { background:#29845e33; outline:2px solid var(--green); outline-offset:-2px; }
     .modal-back { position:fixed; inset:0; z-index:900; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; padding:16px; }
     .modal { background:var(--card); border-radius:12px; padding:16px 18px; width:min(420px,100%); max-height:90vh; overflow:auto; box-shadow:0 8px 32px rgba(0,0,0,.4); }
     .modal h3 { margin:0 0 4px; }
@@ -247,7 +254,7 @@
               <div id="zone-mini"><canvas id="zone-mini-canvas" width="340" height="400"></canvas></div>
               <div id="zone-overlay">
                 <div id="pitch-result"></div>                <canvas id="zone-canvas" width="340" height="400"></canvas>
-                <button id="btn-abs" class="hidden" disabled>ABS challenge (2s)</button>
+                <button id="btn-abs" class="hidden" disabled title="Any part of the ball touching the strike-zone border is a true strike.">ABS challenge (2s)</button>
                 <div id="aim-ui" class="hidden">
                   <div id="aim-types"></div>
                   <div id="meter" class="hidden"><div id="meter-mark"></div></div>
@@ -274,7 +281,7 @@
             <div class="row hidden" id="steal-row" style="margin-top:8px"></div>
             <div id="coach-panel" class="hidden" style="margin-top:8px;padding:8px 10px;border:1px solid #0002;border-radius:8px"></div>
             <div class="row" id="shift-row" style="margin-top:8px"></div>
-            <div class="row hidden" id="shift-custom" style="margin-top:6px"></div>
+            <div class="hidden" id="shift-custom" style="margin-top:6px"></div>
             <div class="pitchinfo" id="pitch-info" style="margin-top:8px"></div>
             <div class="row" id="relay-row" style="margin-top:6px"><label><input type="checkbox" id="relay-on"> Throw via cutoff man (relay, key R) <i class="tip" tabindex="0" data-tip="Routes your next throw through the cutoff man instead of throwing directly. Useful on long outfield throws.">i</i></label><span class="muted" id="relay-hint"></span></div>
             <div class="row hidden" id="evla" style="margin-top:8px">
@@ -390,6 +397,8 @@
   <script src="park-walls.js"></script>
   <script src="foul-walls.js"></script>
   <script src="players-data.js" onerror="void 0"></script>
+  <script src="player-heights.js"></script>
+  <script src="player-weights.js"></script>
   <script src="fielding-motion.js"></script>
   <script src="game-engine.js"></script>
   <script src="league-engine.js"></script>
@@ -561,6 +570,10 @@
       team.scale = 2;
       for (const p of team.lineup) for (const key of BAT_KEYS) if (!Number.isFinite(Number(p[key]))) p[key] = 50;
       for (const p of team.bench) for (const key of BAT_KEYS) if (!Number.isFinite(Number(p[key]))) p[key] = 50;
+      for (const p of [...team.lineup, ...team.bench, ...team.pitchers]) {
+        p.height = E.playerHeight(p);
+        p.weight = E.playerWeight(p);
+      }
       return team;
     }
 
@@ -600,7 +613,7 @@
       input.step = "any";
       input.min = "0";
       input.value = obj[key];
-      if (key === "field") input.title = "FLD controls fielding errors, jump height, dive distance, move timing and recovery. Standing glove reach extends above the 6-ft player.";
+      if (key === "field") input.title = "FLD controls fielding errors, jump height, dive distance, move timing and recovery. Standing glove reach extends above the player's height.";
       input.addEventListener("input", () => { obj[key] = Number(input.value); updateRatings(); });
       input.addEventListener("change", () => { obj[key] = Number(input.value); saveTeams(); updateRatings(); });
       return input;
@@ -712,6 +725,56 @@
       document.addEventListener("pointercancel", up);
     }
 
+    function swapBenchStarter(team, benchIndex, lineupIndex) {
+      const incoming = team.bench[benchIndex], outgoing = team.lineup[lineupIndex];
+      incoming.natural = incoming.natural || incoming.pos;
+      outgoing.natural = outgoing.natural || outgoing.pos;
+      incoming.pos = outgoing.pos;
+      if (incoming._orig) incoming._orig.pos = incoming.pos;
+      team.lineup[lineupIndex] = incoming;
+      team.bench[benchIndex] = outgoing;
+    }
+
+    function startBenchDrag(e, row, lineupBody, team, benchIndex) {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      const pointerId = e.pointerId;
+      let target = null;
+      row.classList.add("dragging");
+      const highlight = (next) => {
+        if (target) target.classList.remove("bench-drop");
+        target = next;
+        if (target) target.classList.add("bench-drop");
+      };
+      const findTarget = (event) => {
+        const hit = document.elementFromPoint(event.clientX, event.clientY);
+        const candidate = hit && hit.closest("tr[data-i]");
+        return candidate && candidate.parentElement === lineupBody ? candidate : null;
+      };
+      const move = (event) => {
+        if (event.pointerId !== pointerId) return;
+        highlight(findTarget(event));
+      };
+      const finish = (event) => {
+        if (event.type !== "blur" && event.pointerId !== pointerId) return;
+        const drop = event.type === "pointerup" ? findTarget(event) : null;
+        document.removeEventListener("pointermove", move);
+        document.removeEventListener("pointerup", finish);
+        document.removeEventListener("pointercancel", finish);
+        window.removeEventListener("blur", finish);
+        row.classList.remove("dragging");
+        highlight(null);
+        if (!drop) return;
+        swapBenchStarter(team, benchIndex, Number(drop.dataset.i));
+        saveTeams();
+        renderTeams();
+      };
+      document.addEventListener("pointermove", move);
+      document.addEventListener("pointerup", finish);
+      document.addEventListener("pointercancel", finish);
+      window.addEventListener("blur", finish);
+    }
+
     /* Real MLB players (players-data.js, built by build-players.js from Baseball Savant). */
     const plain = (s) => String(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
     function playerSearch(team, ti) {
@@ -783,13 +846,13 @@
       function addBatter(p, slot) {
         const next = {
           name: p.name, bats: p.bats, contact: p.contact, power: p.power, eye: p.eye,
-          speed: p.speed, arm: p.arm, field: p.field, risk: p.risk, loft: p.loft, mlb: p.id, natural: p.pos, alt: p.alt || []
+          speed: p.speed, arm: p.arm, field: p.field, risk: p.risk, loft: p.loft, height: E.playerHeight(p), weight: E.playerWeight(p), mlb: p.id, natural: p.pos, alt: p.alt || []
         };
         if (slot === -2) team.bench.push({ ...next, pos: p.pos });
         else team.lineup[slot] = { ...next, pos: team.lineup[slot].pos };
       }
       function addPitcher(p, slot) {
-        const next = { name: p.name, role: slot === 0 ? "SP" : "RP", throws: p.throws, velo: p.velo, control: p.control, movement: p.movement, stamina: p.stamina, mlb: p.id };
+        const next = { name: p.name, role: slot === 0 ? "SP" : "RP", throws: p.throws, velo: p.velo, control: p.control, movement: p.movement, stamina: p.stamina, height: E.playerHeight(p), weight: E.playerWeight(p), mlb: p.id };
         if (slot < 0) team.pitchers.push(next);
         else team.pitchers[slot] = next;
       }
@@ -855,9 +918,9 @@
       const bats = data.batters.filter((p) => p.team === code).sort((a, b) => ovr(b) - ovr(a));
       const toBatter = (p, pos) => ({
         name: p.name, pos, bats: p.bats, contact: p.contact, power: p.power, eye: p.eye,
-        speed: p.speed, arm: p.arm, field: p.field, risk: p.risk, loft: p.loft, mlb: p.id, natural: p.pos, alt: p.alt || []
+        speed: p.speed, arm: p.arm, field: p.field, risk: p.risk, loft: p.loft, height: E.playerHeight(p), weight: E.playerWeight(p), mlb: p.id, natural: p.pos, alt: p.alt || []
       });
-      const toPitcher = (p, role) => ({ name: p.name, role, throws: p.throws, velo: p.velo, control: p.control, movement: p.movement, stamina: p.stamina, mlb: p.id });
+      const toPitcher = (p, role) => ({ name: p.name, role, throws: p.throws, velo: p.velo, control: p.control, movement: p.movement, stamina: p.stamina, height: E.playerHeight(p), weight: E.playerWeight(p), mlb: p.id });
       const left = bats.slice();
       const take = (p) => { left.splice(left.indexOf(p), 1); return p; };
       const spots = {};
@@ -931,9 +994,9 @@
       const bScore = (x) => x.w;
       const toBatter = (p, pos) => ({
         name: p.name, pos, bats: p.bats, contact: p.contact, power: p.power, eye: p.eye,
-        speed: p.speed, arm: p.arm, field: p.field, risk: p.risk, loft: p.loft, mlb: p.id, natural: p.pos, alt: p.alt || []
+        speed: p.speed, arm: p.arm, field: p.field, risk: p.risk, loft: p.loft, height: E.playerHeight(p), weight: E.playerWeight(p), mlb: p.id, natural: p.pos, alt: p.alt || []
       });
-      const toPitcher = (p, role) => ({ name: p.name, role, throws: p.throws, velo: p.velo, control: p.control, movement: p.movement, stamina: p.stamina, mlb: p.id });
+      const toPitcher = (p, role) => ({ name: p.name, role, throws: p.throws, velo: p.velo, control: p.control, movement: p.movement, stamina: p.stamina, height: E.playerHeight(p), weight: E.playerWeight(p), mlb: p.id });
       const lineup = ["C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH"].map((pos) => {
         const x = draw(bats.filter((b) => b.p.pos === pos), bScore) || draw(bats, bScore);
         const at = bats.indexOf(x);
@@ -964,8 +1027,8 @@
     /* Compact roster rows: hover for attributes, click to edit them for this session only. */
     const ATTR_LABELS = { contact: "CON", power: "PWR", eye: "EYE", speed: "SPD", arm: "ARM", field: "FLD", risk: "RISK", velo: "VELO", control: "CTL", movement: "MOV", stamina: "STA" };
     const PIT_KEYS = ["velo", "control", "movement", "stamina"];
-    const EDIT_KEYS = ["name", "pos", "bats", "throws", ...BAT_KEYS, ...PIT_KEYS];
-    const attrSummary = (p, isPitcher) => (isPitcher ? PIT_KEYS : BAT_KEYS).map((k) => `${ATTR_LABELS[k]} ${p[k] ?? "–"}`).join(" · ");
+    const EDIT_KEYS = ["name", "pos", "bats", "throws", "height", "heightManual", "weight", "weightManual", ...BAT_KEYS, ...PIT_KEYS];
+    const attrSummary = (p, isPitcher) => (isPitcher ? PIT_KEYS : BAT_KEYS).map((k) => `${ATTR_LABELS[k]} ${p[k] ?? "–"}`).join(" · ") + ` · Height ${E.playerHeight(p)} in · Weight ${E.playerWeight(p)} lb`;
     function showRowTip(row, p, isPitcher) {
       const pop = $("tip-pop");
       const pen = isPitcher ? 0 : E.positionPenalty(p, p.pos);
@@ -1013,9 +1076,11 @@
           b.style.cssText = "display:block;width:100%;text-align:left;margin-top:3px";
           b.textContent = `${p.name} · ${p.team} ${y} · ${isPitcher ? p.role : p.pos} · OVR ${Math.round(isPitcher ? E.pitcherOverall(p) : E.batterOverall(p))}`;
           b.addEventListener("click", () => {
-            if (isPitcher) Object.assign(player, { name: p.name, throws: p.throws, velo: p.velo, control: p.control, movement: p.movement, stamina: p.stamina, mlb: p.id });
-            else Object.assign(player, { name: p.name, bats: p.bats, contact: p.contact, power: p.power, eye: p.eye, speed: p.speed, arm: p.arm, field: p.field, risk: p.risk, loft: p.loft, mlb: p.id, natural: p.pos, alt: p.alt || [] });
+            if (isPitcher) Object.assign(player, { name: p.name, throws: p.throws, velo: p.velo, control: p.control, movement: p.movement, stamina: p.stamina, height: E.playerHeight(p), weight: E.playerWeight(p), mlb: p.id });
+            else Object.assign(player, { name: p.name, bats: p.bats, contact: p.contact, power: p.power, eye: p.eye, speed: p.speed, arm: p.arm, field: p.field, risk: p.risk, loft: p.loft, height: E.playerHeight(p), weight: E.playerWeight(p), mlb: p.id, natural: p.pos, alt: p.alt || [] });
             if (!isPitcher && isNew) player.pos = p.pos;
+            player.heightManual = false;
+            player.weightManual = false;
             applied();
           });
           results.append(b);
@@ -1027,6 +1092,10 @@
     }
     function openEditor(player, isPitcher, onClose, isNew) {
       $("tip-pop").style.display = "none";
+      player.height = E.playerHeight(player);
+      player.heightManual = !!player.heightManual;
+      player.weight = E.playerWeight(player);
+      player.weightManual = !!player.weightManual;
       if (!player._orig) {
         const snap = {};
         for (const k of EDIT_KEYS) if (player[k] !== undefined) snap[k] = player[k];
@@ -1054,6 +1123,32 @@
         field("Name", nameIn);
         if (isPitcher) field("Throws", selectInput(player, "throws", ["R", "L"]));
         else { field("Position", selectInput(player, "pos", POS_OPTIONS)); field("Bats", selectInput(player, "bats", ["R", "L", "S"])); }
+        const heightInput = document.createElement("input");
+        heightInput.type = "number";
+        heightInput.step = "any";
+        heightInput.value = player.height;
+        heightInput.title = "Total inches (72 = 6 ft). Controls figure height and fielding reach; no upper cap.";
+        heightInput.addEventListener("input", () => {
+          const height = Number(heightInput.value);
+          const valid = Number.isFinite(height) && height > 0;
+          heightInput.setCustomValidity(valid ? "" : "Enter a height greater than zero inches.");
+          if (valid) { player.height = height; player.heightManual = true; }
+          else heightInput.reportValidity();
+        });
+        field("Height (inches)", heightInput);
+        const weightInput = document.createElement("input");
+        weightInput.type = "number";
+        weightInput.step = "any";
+        weightInput.value = player.weight;
+        weightInput.title = "Pounds. Subtly adjusts icon width relative to height; visual only. No upper cap.";
+        weightInput.addEventListener("input", () => {
+          const weight = Number(weightInput.value);
+          const valid = Number.isFinite(weight) && weight > 0;
+          weightInput.setCustomValidity(valid ? "" : "Enter a weight greater than zero pounds.");
+          if (valid) { player.weight = weight; player.weightManual = true; }
+          else weightInput.reportValidity();
+        });
+        field("Weight (lb)", weightInput);
         for (const key of isPitcher ? PIT_KEYS : BAT_KEYS) {
           if (player[key] === undefined) player[key] = 50;
           field(ATTR_LABELS[key], numInput(player, key));
@@ -1182,14 +1277,19 @@
         const benchTitle = document.createElement("div");
         benchTitle.className = "muted";
         benchTitle.style.cssText = "margin-top:12px;font-weight:600";
-        benchTitle.textContent = "Bench (pinch hitters, pinch runners, defensive replacements)";
+        benchTitle.textContent = "Bench — drag a bench grip onto a starter to swap their roster spots";
         const bench = document.createElement("table");
         bench.className = "roster";
         const bh = bench.createTHead().insertRow();
-        ["Name", "Pos", "OVR", ""].forEach((text) => { bh.insertCell().outerHTML = `<th>${text}</th>`; });
+        ["", "Name", "Pos", "OVR", ""].forEach((text) => { bh.insertCell().outerHTML = `<th>${text}</th>`; });
         const bb = bench.createTBody();
         team.bench.forEach((player, index) => {
           const row = rosterRow(bb, player, false, renderTeams);
+          const grip = row.insertCell();
+          grip.className = "grip";
+          grip.textContent = "⠿";
+          grip.title = "Drag onto a starter to swap; takes their batting-order slot and field position";
+          grip.addEventListener("pointerdown", (e) => startBenchDrag(e, row, body, team, index));
           row.insertCell().textContent = player.name;
           posText(row, player);
           const ovr = row.insertCell();
@@ -1212,14 +1312,14 @@
             if (next) {
               team.bench.push({
                 name: next.name, pos: next.pos, bats: next.bats, contact: next.contact, power: next.power, eye: next.eye,
-                speed: next.speed, arm: next.arm, field: next.field, risk: next.risk, loft: next.loft, mlb: next.id, natural: next.pos, alt: next.alt || []
+                speed: next.speed, arm: next.arm, field: next.field, risk: next.risk, loft: next.loft, height: E.playerHeight(next), weight: E.playerWeight(next), mlb: next.id, natural: next.pos, alt: next.alt || []
               });
               saveTeams();
               renderTeams();
               return;
             }
           }
-          const blank = { name: "New player", pos: "DH", bats: "R", contact: 50, power: 50, eye: 50, speed: 50, arm: 50, field: 50, risk: 50 };
+          const blank = { name: "New player", height: 72, weight: 200, pos: "DH", bats: "R", contact: 50, power: 50, eye: 50, speed: 50, arm: 50, field: 50, risk: 50 };
           team.bench.push(blank);
           openEditor(blank, false, () => { saveTeams(); renderTeams(); }, true);
           renderTeams();
@@ -1250,7 +1350,7 @@
         add.textContent = "Add reliever";
         add.style.marginTop = "6px";
         add.addEventListener("click", () => {
-          team.pitchers.push({ name: "Reliever " + team.pitchers.length, role: "RP", throws: "R", velo: 60, control: 48, movement: 50, stamina: 20 });
+          team.pitchers.push({ name: "Reliever " + team.pitchers.length, height: 72, weight: 200, role: "RP", throws: "R", velo: 60, control: 48, movement: 50, stamina: 20 });
           saveTeams();
           renderTeams();
         });
@@ -1533,6 +1633,12 @@
       names.P = fielding.pitchers[fielding.pIdx].name;
       const spots = {};
       const speeds = {};
+      const heights = {};
+      const weights = {};
+      fielding.lineup.forEach((player) => { if (player.pos !== "DH") heights[player.pos] = E.playerHeight(player); });
+      heights.P = E.playerHeight(fielding.pitchers[fielding.pIdx]);
+      fielding.lineup.forEach((player) => { if (player.pos !== "DH") weights[player.pos] = E.playerWeight(player); });
+      weights.P = E.playerWeight(fielding.pitchers[fielding.pIdx]);
       positions.forEach((pos) => { spots[pos] = E.shiftedSpot(game, pos, 1 - game.half, batter); });
       fielding.lineup.forEach((player) => { if (player.pos !== "DH") speeds[player.pos] = E.fieldSpeed(player); });
       speeds.P = E.fieldSpeed(fielding.pitchers[fielding.pIdx]);
@@ -1541,10 +1647,16 @@
         park: game.park.id,
         bases: game.bases.map((runner) => !!runner),
         baseNames: game.bases.map((runner) => (runner ? runner.p.name : null)),
+        baseHeights: game.bases.map((runner) => runner ? E.playerHeight(runner.p) : null),
+        baseWeights: game.bases.map((runner) => runner ? E.playerWeight(runner.p) : null),
         fielders: positions,
         spots,
         speeds,
         names,
+        heights,
+        weights,
+        batterHeight: E.playerHeight(batter),
+        batterWeight: E.playerWeight(batter),
         batter: batter.name
       };
     }
@@ -1563,12 +1675,58 @@
     /* ------------------------------------------------------------ defensive shifts */
 
     let shiftKey = "";
-    let shiftCustomOpen = false;
+    let selectedShift = "";
+    let shiftTeam = -1;
     const SHIFT_POS = ["1B", "2B", "SS", "3B", "LF", "CF", "RF"];
+    const SHIFTS_KEY = "field-notes-custom-shifts-v1";
+    let savedShifts = [];
+    try {
+      const stored = JSON.parse(localStorage.getItem(SHIFTS_KEY) || "[]");
+      if (!Array.isArray(stored) || stored.some((s) => !s || typeof s.id !== "string" || typeof s.name !== "string" ||
+        typeof s.mirror !== "boolean" || !s.custom || SHIFT_POS.some((pos) => !s.custom[pos] ||
+          !Number.isFinite(s.custom[pos].x) || !Number.isFinite(s.custom[pos].y)))) throw new Error("Invalid saved shift data");
+      savedShifts = stored;
+    } catch (error) {
+      console.error("Could not load saved shifts", error);
+      alert("Saved shifts could not be loaded. Your saved data has not been overwritten.");
+    }
+    function persistShifts(next) {
+      try { localStorage.setItem(SHIFTS_KEY, JSON.stringify(next)); }
+      catch (error) {
+        console.error("Could not save shifts", error);
+        alert("Could not save shifts. Browser storage may be full or unavailable.");
+        return false;
+      }
+      savedShifts = next;
+      return true;
+    }
+    function shiftSpec() {
+      const cur = game.shifts[1 - game.half];
+      return { preset: "custom", mirror: !!cur.mirror, custom: Object.fromEntries(SHIFT_POS.map((pos) => [
+        pos, { x: Number(cur.custom[pos]?.x) || 0, y: Number(cur.custom[pos]?.y) || 0 }
+      ])) };
+    }
+    const shiftPoint = (pos, spec) => {
+      const base = E.defaultSpot(pos, game.park), offset = spec.custom[pos] || { x: 0, y: 0 };
+      return { x: base.x + offset.x, y: base.y + offset.y };
+    };
+    function redrawShift() {
+      const spec = shiftSpec();
+      for (const marker of $("shift-diagram").querySelectorAll("[data-fielder]")) {
+        const point = shiftPoint(marker.dataset.fielder, spec);
+        marker.setAttribute("transform", `translate(${300 + point.x} ${450 - point.y})`);
+        marker.setAttribute("aria-label", `${marker.dataset.fielder}: ${Math.round(point.x)} feet right of center, ${Math.round(point.y)} feet from home. Arrow keys move 2 feet.`);
+      }
+    }
+    function applyShift(spec) {
+      E.setShift(game, 1 - game.half, spec);
+      if (phase === "ready") sendScene();
+    }
 
     function renderShift() {
       const team = 1 - game.half;
-      const key = `${team}|${game.over}|${shiftCustomOpen}`;
+      if (shiftTeam !== team) { selectedShift = ""; shiftTeam = team; }
+      const key = `${team}|${game.over}`;
       if (key === shiftKey) return;
       shiftKey = key;
       const row = $("shift-row");
@@ -1580,12 +1738,23 @@
         `</select><i class="tip" tabindex="0" data-tip="Applies from the next pitch. Pull-side shifts follow the batter's handedness.">i</i>`;
       panel.classList.toggle("hidden", cur.preset !== "custom");
       if (cur.preset === "custom") {
-        panel.innerHTML = `<span class="muted">Offsets in ft <i class="tip" tabindex="0" data-tip="x: positive toward the 1B side. y: positive deeper.">i</i></span>` +
-          SHIFT_POS.map((pos) => {
-            const c = cur.custom[pos] || { x: 0, y: 0 };
-            return `<label>${pos} x <input data-sx="${pos}" type="number" step="any" value="${c.x}" style="width:58px"> y <input data-sy="${pos}" type="number" step="any" value="${c.y}" style="width:58px"></label>`;
-          }).join("") +
-          `<label><input type="checkbox" id="shift-mirror" ${cur.mirror ? "checked" : ""}> Mirror vs lefty batters</label>`;
+        const saved = savedShifts.find((s) => s.id === selectedShift);
+        panel.innerHTML = `<div class="muted">Drag the seven fielders into position, or focus one and use arrow keys. Pitcher and catcher stay fixed. Changes apply from the next pitch. Diagram shows your right-handed-batter alignment.</div>
+          <svg id="shift-diagram" viewBox="0 0 600 490" role="group" aria-label="Custom defensive alignment">
+            <path d="M300 450 L20 170 Q300 -80 580 170 Z" fill="#81ad78" stroke="#fff" stroke-width="2"/>
+            <path d="M300 450 L390 360 L300 270 L210 360 Z" fill="#d8bd8d"/>
+            <path d="M300 450 L363.64 386.36 L300 322.72 L236.36 386.36 Z" fill="none" stroke="#fff" stroke-width="2"/>
+            <circle cx="300" cy="389.5" r="8" fill="#d8bd8d"/>
+            <text x="300" y="393" fill="#4e5b50">P</text><text x="300" y="477" fill="#4e5b50">C</text>
+            ${SHIFT_POS.map((pos) => `<g data-fielder="${pos}" tabindex="0" role="button"><circle r="16" fill="#3277a7" stroke="#fff" stroke-width="2"/><text y="4" fill="#fff">${pos}</text><title>Drag ${pos} to position</title></g>`).join("")}
+          </svg>
+          <label style="margin:8px 0;flex-direction:row;align-items:center"><input type="checkbox" id="shift-mirror" ${cur.mirror ? "checked" : ""}> Mirror offsets vs lefty batters</label>
+          <div class="row"><label>Saved shifts<select id="saved-shift"><option value="">Choose a saved shift</option>${savedShifts.map((s) => `<option value="${esc(s.id)}" ${s.id === selectedShift ? "selected" : ""}>${esc(s.name)}</option>`).join("")}</select></label>
+          <label>Shift name<input id="shift-name" type="text" value="${esc(saved?.name || "")}" placeholder="e.g. Deep pull"></label>
+          <button data-shift-act="save">Save as new</button><button data-shift-act="update" ${saved ? "" : "disabled"}>Update saved</button>
+          <button data-shift-act="rename" ${saved ? "" : "disabled"}>Rename</button><button data-shift-act="delete" ${saved ? "" : "disabled"}>Delete</button></div>
+          <div class="muted" style="margin-top:6px">Saved shifts are kept in this browser and can be reused for either team in later games. Update saved replaces its positions; Rename only changes its name.</div>`;
+        redrawShift();
       }
     }
 
@@ -1605,7 +1774,7 @@
       if (key === coachKey) return;
       coachKey = key;
       const opt = (value, label) => `<option value="${value}">${esc(label)}</option>`;
-      let html = `<div class="muted" style="margin-bottom:6px">Manual coaching <i class="tip" tabindex="0" data-tip="Substitutions are permanent. Plate-appearance, half-inning and game buttons pause after every batter so you can make changes.">i</i></div>`;
+      let html = `<button id="btn-substitution" aria-expanded="false" aria-controls="substitution-options">Substitution</button><div id="substitution-options" class="hidden" style="margin-top:8px"><div class="muted" style="margin-bottom:6px">Substitutions are permanent. Simulation pauses between batters when coaching manually.</div>`;
       if (game.coach[bt] === "manual") {
         const team = game.teams[bt];
         const batter = E.currentBatter(game);
@@ -1635,10 +1804,17 @@
         }
         html += `</div>`;
       }
-      panel.innerHTML = html;
+      panel.innerHTML = html + `</div>`;
     }
 
     $("coach-panel").addEventListener("click", (e) => {
+      const toggle = e.target.closest("#btn-substitution");
+      if (toggle) {
+        const open = toggle.getAttribute("aria-expanded") !== "true";
+        toggle.setAttribute("aria-expanded", String(open));
+        $("substitution-options").classList.toggle("hidden", !open);
+        return;
+      }
       const button = e.target.closest("[data-act]");
       if (!button || !game || busyCoach()) return;
       const act = button.dataset.act;
@@ -1654,26 +1830,68 @@
     });
     const busyCoach = () => phase !== "ready" || holdView || liveRun;
 
-    function readShift() {
-      const team = 1 - game.half;
-      const spec = { preset: $("shift-sel").value, custom: {}, mirror: !!($("shift-mirror") && $("shift-mirror").checked) };
-      document.querySelectorAll("#shift-custom [data-sx]").forEach((input) => {
-        const pos = input.dataset.sx;
-        const y = document.querySelector(`#shift-custom [data-sy="${pos}"]`);
-        spec.custom[pos] = { x: Number(input.value) || 0, y: Number(y.value) || 0 };
-      });
-      E.setShift(game, team, spec);
-      return spec;
-    }
-
     $("shift-row").addEventListener("change", (e) => {
       if (e.target.id !== "shift-sel") return;
-      const wasCustom = (game.shifts[1 - game.half] || {}).preset === "custom";
-      const spec = readShift();
-      if (wasCustom !== (spec.preset === "custom")) { shiftKey = ""; renderShift(); }
+      const previous = game.shifts[1 - game.half];
+      applyShift({ preset: e.target.value, custom: previous?.custom || {}, mirror: !!previous?.mirror });
+      selectedShift = "";
+      shiftKey = ""; renderShift();
+    });
+    $("shift-custom").addEventListener("change", (e) => {
+      if (e.target.id === "shift-mirror") applyShift({ ...shiftSpec(), mirror: e.target.checked });
+      if (e.target.id === "saved-shift") {
+        selectedShift = e.target.value;
+        const saved = savedShifts.find((s) => s.id === selectedShift);
+        if (saved) applyShift({ ...saved, preset: "custom" });
+        shiftKey = ""; renderShift();
+      }
+    });
+    $("shift-custom").addEventListener("click", (e) => {
+      const button = e.target.closest("[data-shift-act]");
+      if (!button) return;
+      const act = button.dataset.shiftAct, name = $("shift-name").value.trim();
+      if (act !== "delete" && !name) { alert("Enter a name for this shift."); $("shift-name").focus(); return; }
+      let id = selectedShift, next;
+      if (act === "save") {
+        id = crypto.randomUUID();
+        next = [...savedShifts, { ...shiftSpec(), id, name }];
+      } else if (act === "delete") next = savedShifts.filter((s) => s.id !== id);
+      else next = savedShifts.map((s) => s.id !== id ? s : act === "rename" ? { ...s, name } : { ...shiftSpec(), id, name });
+      if (persistShifts(next)) { selectedShift = act === "delete" ? "" : id; shiftKey = ""; renderShift(); }
+    });
+    let shiftDrag = null;
+    function moveShiftMarker(pos, x, y) {
+      const base = E.defaultSpot(pos, game.park), spec = shiftSpec();
+      spec.custom[pos] = { x: x - base.x, y: y - base.y };
+      E.setShift(game, 1 - game.half, spec);
+      redrawShift();
+    }
+    $("shift-custom").addEventListener("pointerdown", (e) => {
+      const marker = e.target.closest("[data-fielder]");
+      if (!marker || e.button !== 0) return;
+      const svg = $("shift-diagram"), p = new DOMPoint(e.clientX, e.clientY).matrixTransform(svg.getScreenCTM().inverse());
+      const point = shiftPoint(marker.dataset.fielder, shiftSpec());
+      shiftDrag = { pos: marker.dataset.fielder, id: e.pointerId, dx: p.x - 300 - point.x, dy: 450 - p.y - point.y };
+      svg.setPointerCapture(e.pointerId);
+      marker.focus(); e.preventDefault();
+    });
+    $("shift-custom").addEventListener("pointermove", (e) => {
+      if (!shiftDrag || e.pointerId !== shiftDrag.id) return;
+      const p = new DOMPoint(e.clientX, e.clientY).matrixTransform($("shift-diagram").getScreenCTM().inverse());
+      moveShiftMarker(shiftDrag.pos, Math.max(-280, Math.min(280, p.x - 300 - shiftDrag.dx)), Math.max(-3, Math.min(430, 450 - p.y - shiftDrag.dy)));
+    });
+    const finishShiftDrag = () => { if (!shiftDrag) return; shiftDrag = null; if (phase === "ready") sendScene(); };
+    for (const event of ["pointerup", "pointercancel", "lostpointercapture"]) $("shift-custom").addEventListener(event, finishShiftDrag);
+    window.addEventListener("blur", finishShiftDrag);
+    $("shift-custom").addEventListener("keydown", (e) => {
+      const marker = e.target.closest("[data-fielder]");
+      const delta = { ArrowLeft: [-2, 0], ArrowRight: [2, 0], ArrowUp: [0, 2], ArrowDown: [0, -2] }[e.key];
+      if (!marker || !delta) return;
+      e.preventDefault();
+      const point = shiftPoint(marker.dataset.fielder, shiftSpec());
+      moveShiftMarker(marker.dataset.fielder, Math.max(-280, Math.min(280, point.x + delta[0])), Math.max(-3, Math.min(430, point.y + delta[1])));
       if (phase === "ready") sendScene();
     });
-    $("shift-custom").addEventListener("change", () => { readShift(); if (phase === "ready") sendScene(); });
 
     /* ------------------------------------------------------------ umpire challenges */
 
@@ -2337,7 +2555,7 @@
           const f = perspective(p1);
           const c = zoneToCanvas(world.x * f, EYE_Z + (world.z - EYE_Z) * f);
           let { x, y } = c;
-          let r = Math.max(2.2, 0.15 * ZONE_VIEW.scale * f);
+          let r = Math.max(2.2, E.PITCH_RADIUS * ZONE_VIEW.scale * f);
           if (p > 1) {
             // Past the plate the ball keeps going on its line, growing as it nears the camera.
             const wb = pitchPos(timing.pitch, 0.94);
@@ -2410,7 +2628,7 @@
           const miss = zoneToCanvas(feedback.ball.x, feedback.ball.z);
           ctx.fillStyle = "#1f2a24";
           ctx.beginPath();
-          ctx.arc(miss.x, miss.y, 0.15 * ZONE_VIEW.scale, 0, Math.PI * 2);
+          ctx.arc(miss.x, miss.y, E.PITCH_RADIUS * ZONE_VIEW.scale, 0, Math.PI * 2);
           ctx.fill();
           drawReticle(feedback.point, "#d27637");
           ctx.fillStyle = "#1f2a24";
@@ -2449,7 +2667,7 @@
         ctx.strokeStyle = "#1f2a24";
         ctx.lineWidth = 1.5;
         ctx.beginPath();
-        ctx.arc(c.x, c.y, Math.max(2.2, 0.15 * ZONE_VIEW.scale * f), 0, Math.PI * 2);
+        ctx.arc(c.x, c.y, Math.max(2.2, E.PITCH_RADIUS * ZONE_VIEW.scale * f), 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
         return;
@@ -2540,12 +2758,12 @@
       if (!game) return;
       const s = snap || takeSnap();
       const lastName = (full) => (full ? E.shortName(full) : undefined);
-      const fielders = s.fielders.map((pos) => ({ pos, name: lastName(s.names && s.names[pos]), ...((s.spots && s.spots[pos]) || E.defaultSpot(pos, game.park)) }));
-      const runners = s.bases.map((on, index) => (on ? { base: index + 1, name: lastName(s.baseNames && s.baseNames[index]) } : null)).filter(Boolean);
+      const fielders = s.fielders.map((pos) => ({ pos, height: s.heights?.[pos] || 72, weight: s.weights?.[pos] || 200, name: lastName(s.names && s.names[pos]), ...((s.spots && s.spots[pos]) || E.defaultSpot(pos, game.park)) }));
+      const runners = s.bases.map((on, index) => (on ? { base: index + 1, height: s.baseHeights?.[index] || 72, weight: s.baseWeights?.[index] || 200, name: lastName(s.baseNames && s.baseNames[index]) } : null)).filter(Boolean);
       post({ type: "gm-park", park: s.park });
       const half = s.half === undefined ? game.half : s.half;
       const colors = { field: game.teams[1 - half].color, bat: game.teams[half].color };
-      post({ type: "gm-scene", fielders, runners, colors, batter: game.over && !snap ? null : { name: lastName(s.batter) } });
+      post({ type: "gm-scene", fielders, runners, colors, batter: game.over && !snap ? null : { name: lastName(s.batter), height: s.batterHeight || 72, weight: s.batterWeight || 200 } });
     }
 
     const RESULT_COLOR = { out: "#758079", single: "#29845e", double: "#3277a7", triple: "#8c63a9", "home run": "#d27637" };
@@ -2574,7 +2792,7 @@
           if (to <= entry.start) continue;
           // On a fly ball, runners tag up and leave only after the catch (or the drop).
           const tagDelay = play.air && entry.start > 0 && play.time ? play.time + 0.3 : null;
-          runners.push({ name: entry.r && entry.r.p ? E.shortName(entry.r.p.name) : "", from: entry.start, to: Math.min(to, 4), out: entry.out, delay: entry.start === 0 ? 0.15 : tagDelay != null ? tagDelay : 0.35, perBase: entry.start === 0 ? 3.6 : 3.1 });
+          runners.push({ name: entry.r && entry.r.p ? E.shortName(entry.r.p.name) : "", height: entry.r?.p ? E.playerHeight(entry.r.p) : 72, weight: entry.r?.p ? E.playerWeight(entry.r.p) : 200, from: entry.start, to: Math.min(to, 4), out: entry.out, delay: entry.start === 0 ? 0.15 : tagDelay != null ? tagDelay : 0.35, perBase: entry.start === 0 ? 3.6 : 3.1 });
         }
       }
       sendScene(snap);
@@ -2770,7 +2988,7 @@
     }
 
     function esc(text) {
-      return String(text).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+      return String(text).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
     }
 
     let liveAdd = 0;

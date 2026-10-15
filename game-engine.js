@@ -15,6 +15,18 @@
 (function (root) {
   'use strict';
   const motion = typeof module !== 'undefined' && module.exports ? require('./fielding-motion.js') : root.FieldingMotion;
+  const listedHeights = typeof module !== 'undefined' && module.exports ? require('./player-heights.js') : root.MLB_HEIGHTS;
+  const listedWeights = typeof module !== 'undefined' && module.exports ? require('./player-weights.js') : root.MLB_WEIGHTS;
+  const playerHeight = (player) => {
+    const listed = listedHeights && listedHeights[player.mlb || player.id];
+    if (listed && !player.heightManual) return listed;
+    return Number.isFinite(Number(player.height)) && Number(player.height) > 0 ? Number(player.height) : listed || 72;
+  };
+  const playerWeight = (player) => {
+    const listed = listedWeights && listedWeights[player.mlb || player.id];
+    if (listed && !player.weightManual) return listed;
+    return Number.isFinite(Number(player.weight)) && Number(player.weight) > 0 ? Number(player.weight) : listed || 200;
+  };
 
   const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
   // Last name, keeping a generational suffix ("Witt Jr.").
@@ -561,6 +573,7 @@
       vmax,
       react: 0.5,
       reach: motion.ARM_REACH,
+      height: playerHeight(player),
       ability: motion.profile(player.field === undefined ? 50 : player.field),
       armFps: (70 + 0.45 * (player.arm - 20)) * 1.46667
     };
@@ -864,7 +877,7 @@
     for (const kind of [null, 'jump', 'dive']) {
       const move = kind ? motion.action(kind, point.t, fp.ability, ux, uy) : null;
       if (move && move.start < fp.react) continue;
-      const pose = motion.pose(move, point.t);
+      const pose = motion.pose(move, point.t, fp.height);
       const reach = motion.reach(pose, point.z);
       if (!motion.canReach(pose, ux * reach, uy * reach, point.z)) continue;
       const lunge = kind === 'dive' ? fp.ability.dive * Math.max(0, 1 - fp.ability.timing / 0.25) : 0;
@@ -880,6 +893,7 @@
   /* ------------------------------------------------------------ pitch model */
 
   const ZONE = { halfWidth: 0.83, bottom: 1.55, top: 3.45 };
+  const PITCH_RADIUS = 0.125;
   const PITCH_TYPES = {
     FB: { name: 'Fastball', dv: 0, move: 0.6, timing: 1.0 },
     SL: { name: 'Slider', dv: -6, move: 1.2, timing: 1.06 },
@@ -888,13 +902,14 @@
   };
   const DEFAULT_MIX = { FB: 0.52, SL: 0.2, CH: 0.14, CB: 0.14 };
 
-  // Signed distance (ft) from the strike zone: negative inside, positive outside.
+  // Signed ball-to-zone clearance (ft); zero includes a ball touching an edge or corner.
   function zoneDistance(x, z) {
     const dx = Math.abs(x) - ZONE.halfWidth;
     const dz = Math.max(ZONE.bottom - z, z - ZONE.top);
     const ox = Math.max(dx, 0);
     const oz = Math.max(dz, 0);
-    return ox > 0 || oz > 0 ? Math.hypot(ox, oz) : Math.max(dx, dz);
+    const clearance = (ox > 0 || oz > 0 ? Math.hypot(ox, oz) : Math.max(dx, dz)) - PITCH_RADIUS;
+    return Math.abs(clearance) < 1e-10 ? 0 : clearance;
   }
 
   const calledStrikeProb = (distance) => 1 / (1 + Math.exp(distance * 16));
@@ -1038,6 +1053,8 @@
 
   function normalizePlayer(raw, isPitcher) {
     const player = { ...DEFAULTS, bats: 'R', throws: 'R', ...raw };
+    player.height = playerHeight(raw);
+    player.weight = playerWeight(raw);
     const rt = {};
     for (const key of Object.keys(DEFAULTS)) {
       rt[key] = rateOr(player[key], DEFAULTS[key]);
@@ -2574,6 +2591,7 @@
       const bonus = POSITION_BONUS[pos] || {};
       return {
         name: makeName(),
+        height: 72, weight: 200,
         pos,
         bats: rng.pick(['R', 'R', 'R', 'L', 'L', 'S']),
         contact: rate(preset.contact, bonus.contact),
@@ -2598,7 +2616,7 @@
     lineup.splice(0, lineup.length, ...top, ...rest);
     lineup.forEach((p, i) => { if (i === 0 || i === 1) p.risk += 5; });
     const mkPitcher = (role, veloBoost, ctl, sta) => ({
-      name: makeName(), role, throws: rng.pick(['R', 'R', 'L']),
+      name: makeName(), height: 72, weight: 200, role, throws: rng.pick(['R', 'R', 'L']),
       velo: mphToVelo(preset.velo + veloBoost + rng.gauss() * 1.5),
       control: rate(preset.control + ctl), movement: rate(preset.movement), stamina: rate(sta)
     });
@@ -2612,7 +2630,7 @@
       const bonus = POSITION_BONUS[pos] || {};
       const speedy = i === 4;
       return {
-        name: makeName(), pos, natural: pos,
+        name: makeName(), height: 72, weight: 200, pos, natural: pos,
         bats: rng.pick(['R', 'R', 'L', 'S']),
         contact: rate(preset.contact + drop, bonus.contact),
         power: rate(preset.power + drop, bonus.power),
@@ -3067,7 +3085,7 @@
     }
 
     function canFieldAt(f, point) {
-      return motion.canReach(motion.pose(f.move, live.t), point.x - f.x, point.y - f.y, point.z);
+      return motion.canReach(motion.pose(f.move, live.t, f.fp.height), point.x - f.x, point.y - f.y, point.z);
     }
 
     function inPark(f) {
@@ -3481,12 +3499,12 @@
           : [],
         planRelay,
         ball: { x: b.x, y: b.y, z: b.z, mode: b.mode },
-        fielders: fielders.map((f) => ({ pos: f.pos, name: shortName(f.p.name), x: f.x, y: f.y, pose: motion.pose(f.move, live.t), has: b.mode === 'held' && b.holder === f })),
+        fielders: fielders.map((f) => ({ pos: f.pos, name: shortName(f.p.name), height: f.p.height, weight: f.p.weight, x: f.x, y: f.y, pose: motion.pose(f.move, live.t, f.fp.height), has: b.mode === 'held' && b.holder === f })),
         runners: entries.map((e) => {
           const p = pathPoint(e.prog);
           const approaching = e.state === 'run' && e.target < 4 && e.target - e.prog <= 0.9;
           return {
-            id: e.id, isBatter: e.isBatter, x: p.x, y: p.y, state: e.state, out: e.out, scored: e.scored, name: e.r.p.name,
+            id: e.id, isBatter: e.isBatter, height: e.r.p.height, weight: e.r.p.weight, x: p.x, y: p.y, state: e.state, out: e.out, scored: e.scored, name: e.r.p.name,
             base: e.state === 'run' ? e.target : Math.round(e.prog),
             decide: approaching ? { base: e.target, cont: e.userCont, ai: aiGo(e, e.target + 1), blocked: blocked(e.target + 1) } : null,
             canGo: e.state === 'hold' && e.prog < 4 && !blocked(e.prog + 1),
@@ -3581,7 +3599,7 @@
   }
 
   const GameEngine = {
-    PARK_LIST, POSITIONS, STYLES, PITCH_TYPES, DEFAULT_MIX, pitchSpread, ZONE, TIMING_WINDOW, LOC_WINDOW,
+    PARK_LIST, POSITIONS, STYLES, PITCH_TYPES, DEFAULT_MIX, pitchSpread, ZONE, PITCH_RADIUS, TIMING_WINDOW, LOC_WINDOW, playerHeight, playerWeight,
     settings, parkById, fenceAt, boundaryAt, wallAt, flightSim, parkEnv, makeEnv, windNow, windText, windVector, airDensity, tempFactor, PARK_TEMP, defaultSpot, shiftedSpot, setShift, SHIFT_PRESETS,
     createGame, validateTeam, stepPitch, nextPitch, playHeldContact, completeContact, completeLive, reviewLive, resumeSteal, challengeCall, pendingReview,
     simPlateAppearance, simHalfInning, simGame, stealOdds, canSteal,

@@ -215,6 +215,13 @@ assert(Math.abs(diveActor.x-(20+6*Math.sin(1.25)))<1e-8,'Dive animation extends 
 assert(Math.abs(diveActor.z-6*Math.cos(1.25))<1e-8,'Dive animation lowers the figure toward the ground');
 const wispLayers = [];
 context.drawWorldPolygon = (points, fill) => wispLayers.push({points,fill});
+assert.equal(run('playerIconWidth({height:72,weight:200})'), 1);
+assert(run('playerIconWidth({height:72,weight:160})') < 1);
+assert(run('playerIconWidth({height:72,weight:260})') > 1);
+assert(Math.abs(run('playerIconWidth({height:72,weight:200})-playerIconWidth({height:79,weight:200*(79/72)**2})')) < 1e-10, 'Equal weight-for-height yields equal icon width');
+assert(run('playerIconWidth({height:79,weight:250})') < run('playerIconWidth({height:68,weight:250})'), 'Tall heavy player is not automatically bulkier');
+assert.equal(run('playerIconWidth({height:72,weight:1})'), 0.8, 'Icons remain visible for very light custom weights');
+assert.equal(run('playerIconWidth({height:72,weight:10000})'), 1.2, 'Only visual width is bounded, not weight input');
 for (const mode of ['free','runner','ball','field','high','first','third','action']) {
   update(mode);
   wispLayers.length = 0;
@@ -227,5 +234,23 @@ for (const mode of ['free','runner','ball','field','high','first','third','actio
   assert(vertices.every((p)=>Number.isFinite(p.x)&&Number.isFinite(p.y)&&Number.isFinite(p.z)),`${mode}: finite curved silhouette`);
   assert(wispLayers.some((face)=>face.fill==='#123456'),`${mode}: team color preserved`);
   assert(!wispLayers.some((face)=>face.fill==='#fffefa'),`${mode}: no bright inner core`);
+  for (const inches of [66, 79, 96]) {
+    wispLayers.length = 0;
+    run(`drawGameActor({x:20,y:40,height:${inches}},"#2b6fa6","",960,720);`);
+    const customVertices = wispLayers.flatMap((face) => face.points);
+    assert.equal(Math.max(...customVertices.map((p) => p.z)), inches / 12, `${mode}: real/custom height sets actual geometry`);
+    assert.equal(Math.min(...customVertices.map((p) => p.z)), 0, `${mode}: different heights remain grounded`);
+  }
+  const widths = [];
+  for (const weight of [140, 200, 300]) {
+    wispLayers.length = 0;
+    run(`drawGameActor({x:20,y:40,height:72,weight:${weight}},"#2b6fa6","",960,720);`);
+    const vertices = wispLayers.flatMap((face) => face.points);
+    widths.push(Math.max(...vertices.map((p) => Math.hypot(p.x - 20, p.y - 40))));
+    assert.equal(Math.max(...vertices.map((p) => p.z)), 6, `${mode}: weight never changes height`);
+    assert.equal(Math.min(...vertices.map((p) => p.z)), 0, `${mode}: weight never changes ground anchor`);
+  }
+  assert(widths[0] < widths[1] && widths[1] < widths[2], `${mode}: actual icon geometry varies subtly with weight`);
+  assert(widths[2] / widths[1] <= 1.2 + 1e-10 && widths[0] / widths[1] >= 0.8 - 1e-10, `${mode}: width stays subtle`);
 }
 console.log('Passed: eight camera modes, field walking/turning, eye-level projection, position persistence, blur/release cleanup, restored Free view, chase distance/zoom, look-around return, ball headings and clipping.');

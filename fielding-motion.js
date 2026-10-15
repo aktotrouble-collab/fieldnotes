@@ -24,37 +24,40 @@
     };
   }
 
-  function pose(move, time) {
-    if (!move || time < move.start || time >= move.end) return { z: 0, tilt: 0, dx: 0, dy: 0 };
+  function pose(move, time, inches = 72) {
+    const height = inches / 12;
+    if (!move || time < move.start || time >= move.end) return { z: 0, tilt: 0, dx: 0, dy: 0, height };
     const age = time - move.start;
     if (move.kind === 'jump') {
-      return { z: age < move.duration ? move.height * Math.sin(Math.PI * age / move.duration) : 0, tilt: 0, dx: move.dx, dy: move.dy };
+      return { z: age < move.duration ? move.height * Math.sin(Math.PI * age / move.duration) : 0, tilt: 0, dx: move.dx, dy: move.dy, height };
     }
     const rise = clamp(age / Math.max(0.01, move.contact - move.start), 0, 1);
     const recover = time <= move.contact ? 1 : clamp((move.end - time) / (move.end - move.contact), 0, 1);
-    return { z: 0, tilt: 1.25 * rise * recover, dx: move.dx, dy: move.dy };
+    return { z: 0, tilt: 1.25 * rise * recover, dx: move.dx, dy: move.dy, height };
   }
 
   function reach(body, height) {
-    if (height < Math.max(0, body.z - 2) || height > GLOVE_TOP + body.z) return 0;
+    const size = body.height || HEIGHT;
+    if (height < Math.max(0, body.z - 2) || height > size + 2 + body.z) return 0;
     if (body.tilt) {
       const sine = Math.sin(body.tilt), cosine = Math.cos(body.tilt);
-      if (height > HEIGHT * cosine + 1.5) return 0;
-      const along = clamp((height + ARM_REACH * sine) / cosine, 0, HEIGHT);
+      if (height > size * cosine + 1.5) return 0;
+      const along = clamp((height + ARM_REACH * sine) / cosine, 0, size);
       const vertical = height - along * cosine;
       return along * sine + Math.sqrt(Math.max(0, ARM_REACH * ARM_REACH - vertical * vertical));
     }
-    const above = Math.max(0, height - body.z - HEIGHT);
+    const above = Math.max(0, height - body.z - size);
     return ARM_REACH * Math.sqrt(Math.max(0, 1 - above * above / 4));
   }
 
   function canReach(body, dx, dy, height) {
-    if (height < Math.max(0, body.z - 2) || height > GLOVE_TOP + body.z) return false;
+    const size = body.height || HEIGHT;
+    if (height < Math.max(0, body.z - 2) || height > size + 2 + body.z) return false;
     if (!body.tilt) return Math.hypot(dx, dy) <= reach(body, height) + 1e-6;
-    if (height > HEIGHT * Math.cos(body.tilt) + 1.5) return false;
+    if (height > size * Math.cos(body.tilt) + 1.5) return false;
     const axisX = body.dx * Math.sin(body.tilt), axisY = body.dy * Math.sin(body.tilt);
     const axisZ = Math.cos(body.tilt);
-    const along = clamp(dx * axisX + dy * axisY + height * axisZ, 0, HEIGHT);
+    const along = clamp(dx * axisX + dy * axisY + height * axisZ, 0, size);
     return Math.hypot(dx - along * axisX, dy - along * axisY, height - along * axisZ) <= ARM_REACH + 1e-6;
   }
 
