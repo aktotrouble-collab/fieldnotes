@@ -127,8 +127,8 @@
     .log .sendchart:disabled { color:var(--mute); cursor:default; }
     #chal-menu { position:absolute; left:50%; bottom:56px; transform:translateX(-50%); display:none; flex-direction:column; gap:6px; padding:10px; min-width:260px; border-radius:10px; background:rgba(255,253,247,.97); border:1px solid var(--line); box-shadow:0 6px 22px rgba(0,0,0,.3); z-index:6; }
     #chal-menu.on { display:flex; }
-    #btn-challenge.lit { border-color:#f2c14e; color:#1f2a24; background:linear-gradient(90deg,#f2c14e calc(var(--lit,1)*100%),#fffefa 0); box-shadow:0 0 10px rgba(242,193,78,.9); }
-    #btn-challenge { transition:box-shadow .3s; }
+    #btn-challenge.lit, #btn-abs.lit { border-color:#f2c14e; color:#1f2a24; background:linear-gradient(90deg,#f2c14e calc(var(--lit,1)*100%),#fffefa 0); box-shadow:0 0 10px rgba(242,193,78,.9); }
+    #btn-challenge, #btn-abs { transition:box-shadow .3s; }
     #chal-menu button { text-align:left; }
     #chal-menu button:disabled { opacity:.45; cursor:default; }
     #chal-menu .sub { padding-left:14px; display:flex; flex-direction:column; gap:4px; }
@@ -247,6 +247,7 @@
               <div id="zone-mini"><canvas id="zone-mini-canvas" width="340" height="400"></canvas></div>
               <div id="zone-overlay">
                 <div id="pitch-result"></div>                <canvas id="zone-canvas" width="340" height="400"></canvas>
+                <button id="btn-abs" class="hidden" disabled>ABS challenge (2s)</button>
                 <div id="aim-ui" class="hidden">
                   <div id="aim-types"></div>
                   <div id="meter" class="hidden"><div id="meter-mark"></div></div>
@@ -1345,6 +1346,9 @@
 
     $("btn-new").addEventListener("click", () => {
       if (leagueGame && leagueDone) { location.href = "league.html"; return; }
+      resetUmpUI();
+      contactRun = null;
+      replayId += 1;
       stopAnim();
       clipSeq += 1;
       clipView = null;
@@ -1667,23 +1671,28 @@
     let chal = null; // { calls, abs, until, secs, timer, raf, done, resolved }
 
     function resetUmpUI() {
-      if (chal) { clearTimeout(chal.timer); cancelAnimationFrame(chal.raf); }
+      if (chal) { clearTimeout(chal.timer); clearTimeout(chal.replayTimer); cancelAnimationFrame(chal.raf); }
       chal = null;
       $("btn-challenge").classList.remove("lit");
+      $("btn-abs").classList.remove("lit");
+      $("btn-abs").classList.add("hidden");
+      $("btn-abs").disabled = true;
       $("chal-menu").classList.remove("on");
     }
 
-    function openChallenge(review, secs, done) {
+    function openChallenge(review, secs, done, replayRec) {
       resetUmpUI();
-      chal = { calls: review.calls, abs: review.kind === "abs", secs, until: performance.now() + secs * 1000, done };
-      const btn = $("btn-challenge");
+      chal = { calls: review.calls, abs: review.kind === "abs", secs, until: performance.now() + secs * 1000, done, replayRec };
+      const btn = $(chal.abs ? "btn-abs" : "btn-challenge");
+      if (chal.abs) showOverlay(true);
       btn.classList.add("lit");
       const tick = () => {
-        if (!chal || chal.menu) return;
+        if (!chal || chal.menu || chal.replaying) return;
         const left = chal.until - performance.now();
         btn.style.setProperty("--lit", `${Math.max(0, left / (chal.secs * 1000))}`);
         if (left > 0) chal.raf = requestAnimationFrame(tick);
       };
+      chal.tick = tick;
       tick();
       chal.timer = setTimeout(() => closeChallenge(null), secs * 1000);
       refresh();
@@ -1692,45 +1701,53 @@
     function closeChallenge(result) {
       if (!chal || chal.closing) return;
       const done = chal.done;
+      const abs = chal.abs;
       chal.closing = true;
       clearTimeout(chal.timer);
+      clearTimeout(chal.replayTimer);
       cancelAnimationFrame(chal.raf);
       $("chal-menu").classList.remove("on");
       $("btn-challenge").classList.remove("lit");
+      $("btn-abs").classList.remove("lit");
+      $("btn-abs").classList.add("hidden");
+      $("btn-abs").disabled = true;
+      replayId += 1;
       chal = null;
       done();
+      if (abs && phase !== "await" && phase !== "aim") showOverlay(false);
       if (result) $("banner").textContent = result.note;
     }
 
     function renderChallengeMenu() {
       const menu = $("chal-menu");
       if (!chal || chal.closing) { menu.classList.remove("on"); return; }
+      if (chal.abs) return fireChallenge("abs");
       // opening the menu freezes the window so the choice can be made
       chal.menu = true;
       clearTimeout(chal.timer);
       cancelAnimationFrame(chal.raf);
       $("btn-challenge").style.setProperty("--lit", "1");
-      const team = chal.calls[0].team;
-      const left = game.challenges[team];
       const rows = ["abs", "out", "ff"].map((group) => {
         const calls = chal.calls.filter((c) => callGroup(c.id) === group);
-        const remain = group === "abs" ? left.abs : left.field;
-        const label = `${GROUP_NAME[group]} <span class="muted">(${remain} left)</span>`;
-        if (!calls.length || remain <= 0) return `<button disabled>${label}</button>`;
-        if (calls.length === 1) return `<button data-chal="${esc(calls[0].id)}">${label}</button>`;
-        return `<div>${label}</div><div class="sub">${calls.map((c) => `<button data-chal="${esc(c.id)}">${esc(c.label)}</button>`).join("")}</div>`;
+        if (!calls.length) return `<button disabled>${GROUP_NAME[group]}</button>`;
+        return `<div>${GROUP_NAME[group]}</div><div class="sub">${calls.map((c) => {
+          const remain = game.challenges[c.team][group === "abs" ? "abs" : "field"];
+          return `<button data-chal="${esc(c.id)}" ${remain <= 0 ? "disabled" : ""}>${esc(c.label)} <span class="muted">(${remain} left)</span></button>`;
+        }).join("")}</div>`;
       });
       menu.innerHTML = `<strong>What do you want to challenge?</strong>${rows.join("")}<button data-cancel="1">Never mind</button>`;
       menu.classList.add("on");
     }
 
     function fireChallenge(id) {
+      if (!chal || chal.closing || (chal.abs && performance.now() >= chal.until)) return;
       const result = E.challengeCall(game, id);
       if (!result) return;
       closeChallenge(result);
     }
 
     $("btn-challenge").addEventListener("click", () => { if (chal && !chal.closing) renderChallengeMenu(); });
+    $("btn-abs").addEventListener("click", () => { if (chal && chal.abs) fireChallenge("abs"); });
     $("chal-menu").addEventListener("click", (e) => {
       if (e.target.closest("[data-cancel]")) return closeChallenge(null);
       const button = e.target.closest("[data-chal]");
@@ -1739,7 +1756,11 @@
 
     function renderChal() {
       const open = !!(chal && !chal.closing);
-      $("btn-challenge").disabled = !open;
+      $("btn-challenge").disabled = !open || chal.abs;
+      $("btn-abs").disabled = !open || !chal.abs;
+      $("btn-abs").classList.toggle("hidden", !open || !chal.abs);
+      $("btn-replay").disabled = !(open && chal.replayRec) && !(phase === "ready" && lastBall);
+      $("btn-replay").textContent = open && chal.replayRec ? "Replay this play" : "Replay last ball";
       const flags = humanFlags();
       $("chal-left").textContent = game ? [0, 1].filter((t) => flags[t]).map((t) =>
         `${game.teams[t].name}: ${game.challenges[t].abs} ABS · ${game.challenges[t].field} field`).join("  |  ") : "";
@@ -1895,6 +1916,10 @@
         holdView = false;
         settle(out.event, out.rec);
       }
+      if (contactRun) {
+        clearTimeout(revealTimer);
+        finishPendingContact(true);
+      }
       if (liveRun && phase === "live") {
         const run = liveRun;
         liveRun = null;
@@ -1946,6 +1971,9 @@
       const rec = pendingRec || beginRec(E.nextPitch(game));
       const opts = ctx || { ...liveCtl(), human: humanFlags(), hold: true };
       const event = E.stepPitch(game, manual, opts);
+      if (event && event.held === "ff") {
+        return (defer || settle)(E.playHeldContact(game, opts), rec);
+      }
       if (event && event.held) {
         pendingRec = rec;
         const review = E.pendingReview(game, opts);
@@ -1955,19 +1983,13 @@
         };
         if (review) {
           phase = "challenge";
-          const open = () => openChallenge(review, event.held === "abs" ? 5 : 6, resume);
+          const open = () => openChallenge(review, event.held === "abs" ? 2 : 6, resume);
           if (event.held === "abs") {
             const strike = /strike/.test(review.calls[0].label);
             const el = $("pitch-result");
             el.textContent = strike ? "STRIKE" : "BALL";
             el.dataset.kind = strike ? "s" : "b";
             return open();
-          }
-          if (event.held === "ff" && event.heldFlight) {
-            holdView = true;
-            const ms = playFoul(event.heldFlight, rec, {}, false);
-            refresh();
-            return void (revealTimer = setTimeout(() => { holdView = false; open(); }, ms));
           }
           return open();
         }
@@ -2014,6 +2036,7 @@
     $("btn-autopause").addEventListener("click", () => { autoPaused = true; clearTimeout(autoTimer); refresh(); });
 
     function settle(event, rec) {
+      if (event && event.contactPending) return showPendingContact(event, rec);
       const foul = !!(event && event.foul);
       const auto = autoOK(event);
       const keep = !(event && event.live) && !foul && showPitchResult(event, auto);
@@ -2025,6 +2048,44 @@
       if (foul) return holdFoul(event, rec, auto);
       finishStep(event, rec);
       if (auto) scheduleAuto(1300);
+    }
+
+    let contactRun = null;
+    function finishPendingContact(alreadyShown) {
+      const run = contactRun;
+      if (!run) return;
+      contactRun = null;
+      const overturned = game.review && game.review.calls.some((call) => call.overturned);
+      const event = E.completeContact(game, { ...run.opts, human: humanFlags() });
+      holdView = false;
+      timing = null;
+      pendingRec = null;
+      if (alreadyShown && !overturned && event === run.event && !event.live) {
+        phase = "ready";
+        if (event.ball) lastBall = record(event, run.rec);
+        refresh();
+        sendScene();
+      } else settle(event, run.rec);
+    }
+
+    function showPendingContact(event, rec) {
+      timing = null;
+      pendingRec = null;
+      phase = "ready";
+      holdView = true;
+      const opts = { live: { batHuman: controls[game.half] !== "sim", fieldHuman: fieldControls[1 - game.half] !== "sim" } };
+      contactRun = { event, rec, opts };
+      const saved = { ball: event.ball, play: event.play, foul: event.foul, foulCatch: event.foulCatch, snap: rec.snap, pitch: rec.pitch };
+      const ms = event.ball ? playBall(event.ball, event.play, rec.snap, rec.pitch) : playFoul(event.foul, rec, event, false);
+      refresh();
+      clearTimeout(revealTimer);
+      revealTimer = setTimeout(() => {
+        holdView = false;
+        const review = E.pendingReview(game, { human: humanFlags() });
+        if (!review) return finishPendingContact(true);
+        phase = "challenge";
+        openChallenge(review, 6, () => finishPendingContact(true), saved);
+      }, ms);
     }
 
     // The batter doesn't learn fair/foul/caught until the ball has finished flying.
@@ -2396,6 +2457,33 @@
     function drawField() { sendScene(); }
 
     function replay(rec) {
+      if (chal && phase === "challenge") {
+        if (!chal.replayRec || chal.replaying) return;
+        const current = chal;
+        const remaining = Math.max(0, current.until - performance.now());
+        clearTimeout(current.timer);
+        cancelAnimationFrame(current.raf);
+        current.replaying = true;
+        const resume = () => {
+          if (chal !== current) return;
+          current.replaying = false;
+          current.until = performance.now() + remaining;
+          if (!current.menu) {
+            current.timer = setTimeout(() => closeChallenge(null), remaining);
+            current.raf = requestAnimationFrame(current.tick);
+          }
+        };
+        const saved = current.replayRec;
+        if (saved.frames) replayLive(saved, resume);
+        else {
+          const ms = saved.foul
+            ? playFoul(saved.foul, saved, { foulCatch: saved.foulCatch }, false)
+            : playBall(saved.ball, saved.play, saved.snap, saved.pitch, true);
+          clearTimeout(sceneTimer);
+          current.replayTimer = setTimeout(resume, ms);
+        }
+        return;
+      }
       if (!rec || phase !== "ready") return;
       replayId += 1;
       if (rec.frames) replayLive(rec);
@@ -2575,28 +2663,17 @@
       const review = E.reviewLive(game, opts);
       if (!review) return concludeLive(run, opts);
       phase = "challenge";
-      openChallenge(review, 6, () => concludeLive(run, opts));
-    }
-
-    // Replay the play on a loop while the challenge window is open.
-    function loopChallenge(frames) {
-      const id = ++replayId;
-      let i = 0;
-      let wait = 0;
-      const tick = () => {
-        if (id !== replayId || phase !== "challenge" || !frames.length) return;
-        if (wait > 0) { wait -= 1; return requestAnimationFrame(tick); }
-        post({ type: "gm-frame", frame: { ...frames[i], replay: true } });
-        i += 1;
-        if (i >= frames.length) { i = 0; wait = 60; }
-        requestAnimationFrame(tick);
-      };
-      wait = 45;
-      requestAnimationFrame(tick);
+      const last = { ...liveFrame(run.extra, run), done: true };
+      run.frames.push(last);
+      post({ type: "gm-frame", frame: last });
+      openChallenge(review, 6, () => concludeLive(run, opts), {
+        frames: run.frames, snap: run.rec.snap, pitch: run.rec.pitch, extra: run.extra
+      });
     }
 
     function concludeLive(run, opts) {
       const event = E.completeLive(game, opts);
+      if (!event.ball) return settle(event, run.rec);
       const info = resultLabel(event.ball, event.play);
       run.extra = { color: info.color, touch: touchInfo(event.ball) };
       const last = { ...liveFrame(run.extra, run), done: true };
@@ -2612,7 +2689,7 @@
 
     let replayId = 0;
 
-    function replayLive(rec) {
+    function replayLive(rec, done) {
       clearTimeout(sceneTimer);
       const id = ++replayId;
       sendScene(rec.snap);
@@ -2626,6 +2703,7 @@
         post({ type: "gm-frame", frame });
         i += 1;
         if (i < frames.length) requestAnimationFrame(tick);
+        else if (done) done();
         else sceneTimer = setTimeout(() => { if (!liveRun) sendScene(); }, 1800);
       };
       requestAnimationFrame(tick);
@@ -2713,7 +2791,7 @@
       const curSnap = E.snapshot(game);
       const isHuman = human();
       const awaiting = phase === "await";
-      const busy = (phase !== "ready" && !(phase === "challenge" && chal && !chal.closing)) || holdView;
+      const busy = phase !== "ready" || holdView;
       if (!holdView || clipView) {
       const game = viewGame();
       const snap = clipView ? clipView.snap : curSnap;

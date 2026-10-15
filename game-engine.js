@@ -83,6 +83,36 @@
 
   const parkById = (id) => PARK_LIST.find((park) => park.id === id) || PARK_LIST[0];
 
+  // Use the drawn segments rather than interpolating across sharp corners or foul-line seams.
+  function boundaryHit(park, degrees, outfieldOnly = false) {
+    const dx = Math.sin(degrees * Math.PI / 180);
+    const dy = Math.cos(degrees * Math.PI / 180);
+    return traceBoundary(park, 0, 0, dx, dy, Infinity, outfieldOnly);
+  }
+
+  function traceBoundary(park, x, y, dx, dy, maxT, outfieldOnly = false) {
+    if (typeof require === 'function' && !root.PARK_WALLS) require('./park-walls.js');
+    const outline = root.PARK_BOUNDARIES && root.PARK_BOUNDARIES[park.id];
+    if (!outline) return null;
+    const count = outfieldOnly ? outline.outfield : outline.points.length;
+    let best = null;
+    for (let i = 0; i < count; i += 1) {
+      const [ax, ay] = outline.points[i];
+      const [bx, by] = outline.points[(i + 1) % outline.points.length];
+      const ex = bx - ax;
+      const ey = by - ay;
+      const den = dx * ey - dy * ex;
+      if (Math.abs(den) < 1e-9) continue;
+      const feet = ((ax - x) * ey - (ay - y) * ex) / den;
+      const u = ((ax - x) * dy - (ay - y) * dx) / den;
+      if (feet > 1e-9 && feet <= maxT && u >= -1e-9 && u <= 1 + 1e-9 && (!best || feet < best.feet)) {
+        const length = Math.hypot(ex, ey);
+        best = { feet, x: x + feet * dx, y: y + feet * dy, height: outline.heights[i], nx: ey / length, ny: -ex / length };
+      }
+    }
+    return best;
+  }
+
   // Fence distance in feet at a spray angle (0 = CF, negative = LF), matching the walls drawn in the 3D chart.
   function wallSample(park, degrees) {
     if (typeof require === 'function' && !root.PARK_WALLS) {
@@ -110,6 +140,8 @@
   }
 
   function fenceAt(park, degrees) {
+    const exact = boundaryHit(park, degrees, true);
+    if (exact) return exact.feet;
     const sample = wallSample(park, degrees);
     if (sample) return sample.feet;
     const [left, center, right] = park.dims;
@@ -144,6 +176,8 @@
   }
 
   function boundaryAt(park, degrees) {
+    const exact = boundaryHit(park, degrees);
+    if (exact) return exact.feet;
     const m = Math.abs(degrees);
     const limit = foulLimit(park, degrees);
     if (m <= limit) return fenceAt(park, degrees);
@@ -155,6 +189,8 @@
   }
 
   function wallAt(park, degrees) {
+    const exact = boundaryHit(park, degrees);
+    if (exact) return exact.height;
     const sample = wallSample(park, degrees);
     if (sample) return sample.height;
     for (const [from, to, height] of park.walls || []) {
@@ -368,7 +404,8 @@
       const nx = x + vx * dt;
       const ny = y + vy * dt;
       const here = angleOf(nx, ny);
-      let reach = opts.noFence || past ? Infinity : boundaryAt(park, here);
+      const boundary = opts.noFence || past ? null : boundaryHit(park, here);
+      let reach = opts.noFence || past ? Infinity : boundary ? boundary.feet : boundaryAt(park, here);
       if (!past && !opts.noFence && firstLand < 0 && !rolling && (opts.foulOver ?? settings.foulOver)) {
         const lim = foulLimit(park, here);
         const wallDist = reach;
@@ -379,15 +416,17 @@
         }
       }
       const radial = nx * vx + ny * vy;
-      if (Math.hypot(nx, ny) >= reach && radial > 0) {
-        fence = reach;
-        const limit = foulLimit(park, here);
-        const crossFair = Math.abs(here) <= limit;
-        wallHeight = crossFair || Math.abs(here) <= limit + 1 ? wallAt(park, here) : 8;
-        const crossZ = rolling ? 0 : Math.max(z, nz);
-        const poleMiss = reach * Math.abs(Math.abs(here) - limit) * Math.PI / 180;
+      const crossing = opts.noFence || past ? null : traceBoundary(park, x, y, nx - x, ny - y, 1);
+      if (crossing || (Math.hypot(nx, ny) >= reach && radial > 0)) {
+        const crossAngle = crossing ? angleOf(crossing.x, crossing.y) : here;
+        fence = crossing ? Math.hypot(crossing.x, crossing.y) : reach;
+        const limit = foulLimit(park, crossAngle);
+        const crossFair = Math.abs(crossAngle) <= limit;
+        wallHeight = crossing ? crossing.height : boundary ? boundary.height : crossFair || Math.abs(here) <= limit + 1 ? wallAt(park, here) : 8;
+        const crossZ = rolling ? 0 : crossing ? z + (nz - z) * crossing.feet : Math.max(z, nz);
+        const poleMiss = fence * Math.abs(Math.abs(crossAngle) - limit) * Math.PI / 180;
         if (crossZ > wallHeight && firstLand < 0) {
-          landAngle = here;
+          landAngle = crossAngle;
           if (crossFair || poleMiss <= FOUL_POLE_REACH) {
             fair = crossFair;
             hr = true;
@@ -406,20 +445,23 @@
         }
         if (firstLand < 0) {
           fair = crossFair;
-          landAngle = here;
+          landAngle = crossAngle;
         }
-        // Reflect the radial component off the wall and bleed the rest.
+        // Reflect off the actual segment, including the angled walls at park corners.
         const r = Math.hypot(nx, ny);
         const nxu = nx / r;
         const nyu = ny / r;
-        const vr = vx * nxu + vy * nyu;
-        const tx = vx - vr * nxu;
-        const ty = vy - vr * nyu;
-        vx = tx * 0.6 - 0.35 * vr * nxu;
-        vy = ty * 0.6 - 0.35 * vr * nyu;
+        const normalX = crossing ? crossing.nx : boundary ? boundary.nx : nxu;
+        const normalY = crossing ? crossing.ny : boundary ? boundary.ny : nyu;
+        const vr = vx * normalX + vy * normalY;
+        const tx = vx - vr * normalX;
+        const ty = vy - vr * normalY;
+        vx = tx * 0.6 - 0.35 * vr * normalX;
+        vy = ty * 0.6 - 0.35 * vr * normalY;
         vz *= 0.7;
-        x = nxu * (reach - 0.3);
-        y = nyu * (reach - 0.3);
+        const beforeWall = crossing ? Math.max(0, crossing.feet - 0.05 / Math.max(0.05, Math.hypot(nx - x, ny - y))) : 0;
+        x = crossing ? x + (nx - x) * beforeWall : nxu * (reach - 0.3);
+        y = crossing ? y + (ny - y) * beforeWall : nyu * (reach - 0.3);
         z = Math.max(0, Math.min(crossZ, wallHeight));
         if (wallHit < 0) wallHit = pts.length;
         pts.push({ t, x, y, z });
@@ -542,8 +584,10 @@
   // Keeps a point inside the park: the fence in fair ground, the stands in foul ground, the backstop behind the plate.
   function keepInside(park, x, y) {
     const angle = Math.atan2(x, y) * 180 / Math.PI;
-    const limit = boundaryAt(park, angle) - 0.4;
     const r = Math.hypot(x, y);
+    const wall = boundaryHit(park, angle);
+    const inset = wall && r > 0 ? 0.4 / Math.max(0.001, Math.abs((wall.nx * x + wall.ny * y) / r)) : 0.4;
+    const limit = Math.max(0, (wall ? wall.feet : boundaryAt(park, angle)) - inset);
     return r > limit && r > 0 ? { x: x * limit / r, y: y * limit / r } : { x, y };
   }
 
@@ -743,7 +787,12 @@
         const step = s.speed * 0.9 * dt;
         if (dist <= step) { s.x = d.x; s.y = d.y; } else { s.x += (d.x - s.x) / dist * step; s.y += (d.y - s.y) / dist * step; }
       }
-      for (const s of st) tracks[s.pos].push([+t.toFixed(2), +s.x.toFixed(1), +s.y.toFixed(1)]);
+      for (const s of st) {
+        const p = keepInside(c.park, s.x, s.y);
+        s.x = p.x;
+        s.y = p.y;
+        tracks[s.pos].push([+t.toFixed(2), s.x, s.y]);
+      }
     }
     return tracks;
   }
@@ -1377,7 +1426,7 @@
     return { incoming, outgoing, penalty };
   }
 
-  const busy = (g) => g.over || g.pendingLive || g.heldSteal;
+  const busy = (g) => g.over || g.pendingLive || g.pendingContact || g.heldSteal;
 
   function subText(info, label, team) {
     const oop = info.penalty ? ` (out of position at ${info.incoming.pos})` : '';
@@ -1907,19 +1956,105 @@
     return finishPA(g, pa, event);
   }
 
+  // Play the actual contact before opening its review; defer only the score/stat application.
+  function playHeldContact(g, opts) {
+    opts = opts || {};
+    const pa = g.pa;
+    const held = pa && pa.held;
+    if (!held || held.stage !== 'ff') return null;
+    const { event, ff } = held;
+    const contact = held.ballInPlay || held.foulBall;
+    const ball = flightSim(contact.ev, contact.la, contact.dir, g.park, flyOf(g, contact));
+    markTouch(ball, () => flightSim(contact.ev, contact.la, contact.dir, g.park, flyOf(g, contact, { noFence: true })));
+    held.shownFair = ff.umpFair;
+    delete event.held;
+    delete event.heldFlight;
+    if (ff.umpFair) {
+      if (ball.grd && fieldBall(ball, defenseList(g)).index < ball.pts.length - 1) ball.grd = false;
+      if (ball.hr) ball.hrDistance = ball.touch.d;
+      ball.wind = contact.wind;
+      ball.spin = contact.spin;
+      event.ball = ball;
+      event.call = 'in play';
+      event.text = `${Math.round(held.pitch.mph)} mph ${PITCH_TYPES[held.pitch.type].name}: in play.`;
+      if (opts.live && !ball.hr && !ball.grd) {
+        event.live = createLivePlay(g, ball, pa.runner, opts.live);
+        g.pendingLive = { event, pa, ball, live: event.live, heldContact: held };
+        return event;
+      }
+      event.play = resolveBattedBall(g, ball, pa.runner);
+    } else {
+      event.call = 'foul';
+      event.foul = ball;
+      if (contact.la >= 25) {
+        const caught = fieldBall(ball, defenseList(g), {
+          airOnly: true, region: (p) => Math.hypot(p.x, p.y) <= 115 && p.y >= -50
+        });
+        if (caught && !g.rng.chance(fieldingErrorP(caught.f, true))) {
+          event.call = 'foul popup caught';
+          event.foul = { ...ball, pts: ball.pts.filter((p) => p.t < caught.t) };
+          event.foulCatch = { pos: caught.f.pos, x: caught.x, y: caught.y, t: caught.t };
+        }
+      }
+    }
+    event.contactPending = true;
+    g.pendingContact = { event, pa, held };
+    return event;
+  }
+
+  function completeContact(g, opts) {
+    const pending = g.pendingContact;
+    if (!pending) return null;
+    g.pendingContact = null;
+    const { event, pa, held } = pending;
+    g.review = held.review;
+    cpuChallenges(g, opts);
+    delete event.contactPending;
+    if (held.ff.umpFair !== held.shownFair) {
+      delete event.ball;
+      delete event.play;
+      delete event.foul;
+      delete event.foulCatch;
+      return stepPitch(g, undefined, { ...opts, hold: false });
+    }
+    logReview(g);
+    g.review = null;
+    pa.held = null;
+    if (event.ball) {
+      applyBattedBall(g, event.ball, pa.runner, pa.pitcher, event.play);
+      return finishBall(g, pa, event, event.ball, event.play);
+    }
+    if (event.foulCatch) {
+      const outcome = recordOut(g, pa, event, `${pa.batter.name} pops out to ${event.foulCatch.pos} in foul territory.`);
+      return finishPA(g, pa, outcome);
+    }
+    if (g.count.strikes < 2) g.count.strikes += 1;
+    event.text = `${Math.round(held.pitch.mph)} mph ${PITCH_TYPES[held.pitch.type].name}: foul.`;
+    emit(g, 'pitch', `${event.text} (${g.count.balls}-${g.count.strikes})`, { pitch: held.pitch });
+    return closePitch(g, pa, event);
+  }
+
   // Applies a finished live play to the game and returns the completed pitch event.
   function completeLive(g, opts) {
     const pending = g.pendingLive;
     if (!pending) return null;
     g.pendingLive = null;
-    const { event, pa, ball, live } = pending;
-    const calls = live.prepare();
+    const { event, pa, ball, live, heldContact } = pending;
+    const calls = [...(heldContact ? heldContact.review.calls : []), ...live.prepare()];
     if (calls.length) {
       if (!g.review || g.review.kind !== 'live') setReview(g, 'live', calls);
       cpuChallenges(g, opts);
-      logReview(g);
-      g.review = null;
     }
+    if (heldContact) {
+      if (heldContact.ff.umpFair !== heldContact.shownFair) {
+        delete event.ball;
+        delete event.live;
+        return stepPitch(g, undefined, { ...opts, hold: false });
+      }
+      pa.held = null;
+    }
+    logReview(g);
+    g.review = null;
     const result = live.result();
     applyBattedBall(g, ball, pa.runner, pa.pitcher, result);
     event.liveDone = true;
@@ -1930,7 +2065,7 @@
   function reviewLive(g, opts) {
     const pending = g.pendingLive;
     if (!pending) return null;
-    const calls = pending.live.prepare();
+    const calls = [...(pending.heldContact ? pending.heldContact.review.calls : []), ...pending.live.prepare()];
     if (!calls.length) return null;
     setReview(g, 'live', calls);
     const open = pendingReview(g, opts);
@@ -3399,7 +3534,7 @@
   const GameEngine = {
     PARK_LIST, POSITIONS, STYLES, PITCH_TYPES, DEFAULT_MIX, pitchSpread, ZONE, TIMING_WINDOW, LOC_WINDOW,
     settings, parkById, fenceAt, boundaryAt, wallAt, flightSim, parkEnv, makeEnv, windNow, windText, windVector, airDensity, tempFactor, PARK_TEMP, defaultSpot, shiftedSpot, setShift, SHIFT_PRESETS,
-    createGame, validateTeam, stepPitch, nextPitch, completeLive, reviewLive, resumeSteal, challengeCall, pendingReview,
+    createGame, validateTeam, stepPitch, nextPitch, playHeldContact, completeContact, completeLive, reviewLive, resumeSteal, challengeCall, pendingReview,
     simPlateAppearance, simHalfInning, simGame, stealOdds, canSteal,
     snapshot, boxScore, sprayChartEntries, generateTeam, makeRng, contactWord, currentBatter, currentPitcher,
     batterOverall, pitcherOverall, offenseOf, defenseOf, teamRatings, mphToVelo, veloToMph, positionPenalty, eligibleAt,
