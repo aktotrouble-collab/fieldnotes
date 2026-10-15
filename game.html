@@ -293,6 +293,7 @@
               <label class="muted">Baserunning / throw decisions <i class="tip" tabindex="0" data-tip="Batting: click GO / STOP / TURN BACK by the base your runner is approaching (keys G / S / B). Fielding: pick the throw target as the fielder gets to the ball. Real-time keeps the play moving; Pause stops it for each decision. Unanswered decisions use the AI's choice.">i</i> <select id="decision"><option value="real" selected>Real-time</option><option value="pause">Pause for each decision</option></select></label>
               <label class="muted">Camera <select id="camera-mode">
                 <option value="free">Free / User Control</option>
+                <option value="field">Field Mode / Walk Around</option>
                 <option value="action">Wide Action</option>
                 <option value="ball">Follow Ball</option>
                 <option value="runner">Hitter / Third Person</option>
@@ -300,6 +301,7 @@
                 <option value="first">First-base Broadcast</option>
                 <option value="third">Third-base Broadcast</option>
               </select> <i class="tip" tabindex="0" data-tip="Wide Action keeps the field visible while turning toward the play. Follow Ball chases behind the ball facing its travel direction, including throws. Hitter / Third Person follows close behind the hitter facing the ball. In both follow modes, drag to look around; release to ease back to the tracking angle. Scroll, pinch or use +/- to change the follow distance, as close as 3 ft, without leaving the mode. Pan (Shift/right-drag) or use the arrow controls to return to Free / User Control. Bird's-eye and broadcast views are fixed angles. Your camera mode and follow distances are remembered and also apply to replays.">i</i></label>
+              <button id="btn-field-mode" title="Field-level free camera. Up/down walk, left/right turn, drag to look. Your position is remembered.">Enter Field Mode</button>
               <span class="muted">Umpires <i class="tip" tabindex="0" data-tip="Umpires can miss calls. When one goes against a team you control, press the glowing Challenge button within 1 s (ball/strike) or 8 s (safe/out, fair/foul) and choose what to challenge; ignore it and it fades. A failed challenge costs one (2 ABS and 1 field per team per game); overturning a bad call is free.">i</i></span>
             </div>
             <div class="banner" id="banner" style="margin-top:8px">&nbsp;</div>
@@ -388,6 +390,7 @@
   <script src="park-walls.js"></script>
   <script src="foul-walls.js"></script>
   <script src="players-data.js" onerror="void 0"></script>
+  <script src="fielding-motion.js"></script>
   <script src="game-engine.js"></script>
   <script src="league-engine.js"></script>
   <script>
@@ -597,6 +600,7 @@
       input.step = "any";
       input.min = "0";
       input.value = obj[key];
+      if (key === "field") input.title = "FLD controls fielding errors, jump height, dive distance, move timing and recovery. Standing glove reach extends above the 6-ft player.";
       input.addEventListener("input", () => { obj[key] = Number(input.value); updateRatings(); });
       input.addEventListener("change", () => { obj[key] = Number(input.value); saveTeams(); updateRatings(); });
       return input;
@@ -2125,7 +2129,7 @@
       sendScene(rec && rec.snap);
       const catchInfo = event && event.foulCatch;
       const points = flight.pts.map((p) => ({ t: p.t, x: p.x, y: p.y, z: p.z }));
-      if (catchInfo) points.push({ t: catchInfo.t, x: catchInfo.x, y: catchInfo.y, z: 3 });
+      if (catchInfo) points.push({ t: catchInfo.t, x: catchInfo.x, y: catchInfo.y, z: catchInfo.z });
       const end = points.length ? points[points.length - 1].t : 3;
       const spot = catchInfo ? { x: catchInfo.x, y: catchInfo.y } : flight.landing ? { x: flight.landing.x, y: flight.landing.y } : undefined;
       post({
@@ -2134,10 +2138,10 @@
         color: catchInfo ? "#758079" : "#9aa59d",
         touch: touchInfo(flight),
         landing: spot,
-        fielder: catchInfo ? { pos: catchInfo.pos, x: catchInfo.x, y: catchInfo.y, t: catchInfo.t } : null,
+        fielder: catchInfo || null,
         throws: [],
         runners: [],
-        tracks: buildTracks(rec && rec.snap, points, spot, catchInfo ? { pos: catchInfo.pos, x: catchInfo.x, y: catchInfo.y, t: catchInfo.t } : null, [], [], end + 1.5),
+        tracks: buildTracks(rec && rec.snap, points, spot, catchInfo || null, [], [], end + 1.5),
         lead: preRoll(rec && rec.pitch)
       });
       return (preRoll(rec && rec.pitch) + end + 1.2) * 1000;
@@ -2504,7 +2508,17 @@
     let frameReady = false;
     const post = (message) => { if (frameReady && frame.contentWindow) frame.contentWindow.postMessage(message, "*"); };
     const frameSrc = (park) => `index.html?embed=1&game=1&park=${encodeURIComponent(park)}`;
-    $("camera-mode").addEventListener("change", () => post({ type: "gm-camera", mode: $("camera-mode").value }));
+    function syncCameraMode() {
+      const mode = $("camera-mode").value;
+      $("btn-field-mode").hidden = mode !== "free" && mode !== "field";
+      $("btn-field-mode").textContent = mode === "field" ? "Exit Field Mode" : "Enter Field Mode";
+      post({ type: "gm-camera", mode });
+    }
+    $("camera-mode").addEventListener("change", syncCameraMode);
+    $("btn-field-mode").addEventListener("click", () => {
+      $("camera-mode").value = $("camera-mode").value === "field" ? "free" : "field";
+      $("camera-mode").dispatchEvent(new Event("change", { bubbles: true }));
+    });
     window.addEventListener("message", (event) => {
       if (event.source !== frame.contentWindow || !event.data) return;
       if (event.data.type === "gm-camera-mode" && event.data.mode === "free") {
@@ -2514,7 +2528,7 @@
       }
       if (event.data.type !== "gm-ready") return;
       frameReady = true;
-      post({ type: "gm-camera", mode: $("camera-mode").value });
+      syncCameraMode();
       if (game) sendScene();
     });
     function loadPark(parkId) {
@@ -2565,17 +2579,18 @@
       }
       sendScene(snap);
       const fielded = !!(play && play.fielder && spot && !ball.hr && defenders.includes(play.fielder.pos));
+      const primary = fielded ? { pos: play.fielder.pos, x: spot.x, y: spot.y, t: Math.max(0.5, play.time || 2), ...(play.fielding || {}) } : null;
       let points = (ball.hr && ball.fullPts && !hrStop() ? ball.fullPts : ball.pts).map((point) => ({ t: point.t, x: point.x, y: point.y, z: point.z }));
       if (fielded) {
         const cut = Math.max(0.5, play.time || 2);
         points = points.filter((point) => point.t < cut);
-        points.push({ t: cut, x: spot.x, y: spot.y, z: play.air ? 3 : 0.3 });
+        points.push({ t: cut, x: spot.x, y: spot.y, z: play.fielding ? play.fielding.z : play.air ? 3 : 0.3 });
       }
       const throwList = fielded ? (play.throws || []).map((th) => ({ from: th.from, to: th.to, release: th.release, arrive: th.arrive, receiver: th.receiver })) : [];
       const tFlightEnd = points.length ? points[points.length - 1].t : 3;
       const tRunEnd = runners.reduce((m, r) => Math.max(m, r.delay + r.perBase * (r.to - r.from)), 0);
       const tracks = buildTracks(snap, points, ball.landing ? { x: ball.landing.x, y: ball.landing.y } : undefined,
-        fielded ? { pos: play.fielder.pos, x: spot.x, y: spot.y, t: Math.max(0.5, play.time || 2) } : null,
+        primary,
         throwList, runners.map((r) => ({ from: r.from, to: r.to, delay: r.delay, perBase: r.perBase })),
         Math.max(tFlightEnd, tRunEnd, ...throwList.map((th) => th.arrive)) + 2.4);
       // On a fielded ground ball, hold the result until the batter's fate is settled.
@@ -2591,7 +2606,7 @@
         color: RESULT_COLOR[result],
         touch: touchInfo(ball),
         landing: fielded ? { x: spot.x, y: spot.y } : ball.landing ? { x: ball.landing.x, y: ball.landing.y } : undefined,
-        fielder: fielded ? { pos: play.fielder.pos, x: spot.x, y: spot.y, t: Math.max(0.5, play.time || 2) } : null,
+        fielder: primary,
         throws: throwList,
         runners,
         tracks,

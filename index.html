@@ -1036,6 +1036,7 @@
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <script src="park-walls.js"></script>
+  <script src="fielding-motion.js"></script>
   <script>    (() => {
       const STORAGE_KEY = "field-notes-spray-chart-v1";
       const EMBED_PARAMS = new URLSearchParams(location.search);
@@ -1145,6 +1146,16 @@
       let cameraRunner = null;
       let chaseCamera = null;
       const chaseLook = { yaw: 0, pitch: 0, held: false, updatedAt: 0, raf: 0 };
+      const fieldCamera = { x: 0, y: -12, z: 5.5, yaw: 0, pitch: -0.08, zoom: 1 };
+      const fieldKeys = new Set();
+      let fieldWalkRaf = 0;
+      let fieldWalkAt = 0;
+      try {
+        const saved = JSON.parse(localStorage.getItem("field-notes-field-camera") || "{}");
+        for (const key of ["x", "y", "yaw"]) if (Number.isFinite(saved[key])) fieldCamera[key] = saved[key];
+        if (Number.isFinite(saved.pitch)) fieldCamera.pitch = Math.max(-1.3, Math.min(1.3, saved.pitch));
+        if (Number.isFinite(saved.zoom)) fieldCamera.zoom = Math.max(0.5, Math.min(3, saved.zoom));
+      } catch (error) { console.warn("Unable to restore field camera", error); }
       const chaseDistances = { runner: 12, ball: 18 };
       try {
         const saved = JSON.parse(localStorage.getItem("field-notes-chase-distances") || "{}");
@@ -3296,7 +3307,7 @@
       }
 
       function projectChasePoint(point, width, height) {
-        const focal = Math.min(width, height) * 0.8;
+        const focal = Math.min(width, height) * 0.8 * (gameCameraMode === "field" ? fieldCamera.zoom : 1);
         const depth = Math.max(0.5, point.d);
         return { x: width / 2 + point.x * focal / depth, y: height * 0.44 - point.y * focal / depth, depth: point.d };
       }
@@ -3493,7 +3504,9 @@
           context.textBaseline = "top";
           context.lineWidth = 3;
           context.strokeStyle = "#fffefa";
-          const text = `${gameCameraMode === "runner" ? "Hitter" : "Ball"} follow: ${chaseDistances[gameCameraMode].toFixed(1)} ft · Scroll or +/- to zoom`;
+          const text = gameCameraMode === "field"
+            ? "Field Mode · ↑/↓ walk · ←/→ turn · Drag to look"
+            : `${gameCameraMode === "runner" ? "Hitter" : "Ball"} follow: ${chaseDistances[gameCameraMode].toFixed(1)} ft · Scroll or +/- to zoom`;
           context.strokeText(text, width - 12, 12);
           context.fillStyle = "#1c2a21";
           context.fillText(text, width - 12, 12);
@@ -3516,8 +3529,9 @@
       const gameState = { scene: { fielders: [], runners: [], batter: null }, play: null, live: null, chips: [] };
 
       function setGameCamera(mode, manual = false) {
-        if (!["free", "action", "ball", "runner", "high", "first", "third"].includes(mode)) return;
+        if (!["free", "field", "action", "ball", "runner", "high", "first", "third"].includes(mode)) return;
         if (mode === gameCameraMode) return;
+        if (gameCameraMode === "field") stopFieldWalk();
         if (gameCameraMode === "free") freeCamera = { ...camera };
         gameCameraMode = mode;
         cameraUpdatedAt = 0;
@@ -3535,6 +3549,43 @@
 
       function takeCameraControl() {
         if (IS_GAME && gameCameraMode !== "free") setGameCamera("free", true);
+      }
+
+      function saveFieldCamera() {
+        try {
+          localStorage.setItem("field-notes-field-camera", JSON.stringify(fieldCamera));
+        } catch (error) { console.warn("Unable to save field camera", error); }
+      }
+
+      function moveFieldCamera(seconds) {
+        const turn = (fieldKeys.has("ArrowRight") ? 1 : 0) - (fieldKeys.has("ArrowLeft") ? 1 : 0);
+        const walk = (fieldKeys.has("ArrowUp") ? 1 : 0) - (fieldKeys.has("ArrowDown") ? 1 : 0);
+        fieldCamera.yaw += turn * seconds * 1.5;
+        fieldCamera.yaw = Math.atan2(Math.sin(fieldCamera.yaw), Math.cos(fieldCamera.yaw));
+        fieldCamera.x += Math.sin(fieldCamera.yaw) * walk * seconds * 24;
+        fieldCamera.y += Math.cos(fieldCamera.yaw) * walk * seconds * 24;
+      }
+
+      function startFieldWalk(key) {
+        fieldKeys.add(key);
+        if (fieldWalkRaf) return;
+        fieldWalkAt = performance.now();
+        const walk = (now) => {
+          fieldWalkRaf = 0;
+          if (gameCameraMode !== "field" || !fieldKeys.size) return;
+          moveFieldCamera(Math.max(0, Math.min(0.1, (now - fieldWalkAt) / 1000)));
+          fieldWalkAt = now;
+          render3D();
+          fieldWalkRaf = requestAnimationFrame(walk);
+        };
+        fieldWalkRaf = requestAnimationFrame(walk);
+      }
+
+      function stopFieldWalk() {
+        fieldKeys.clear();
+        cancelAnimationFrame(fieldWalkRaf);
+        fieldWalkRaf = 0;
+        if (gameCameraMode === "field") saveFieldCamera();
       }
 
       function beginChaseLook() {
@@ -3638,6 +3689,13 @@
 
       function updateGameCamera(width, height) {
         if (gameCameraMode === "free") return;
+        if (gameCameraMode === "field") {
+          chaseCamera = { eye: { x: fieldCamera.x, y: fieldCamera.y, z: fieldCamera.z }, yaw: fieldCamera.yaw, pitch: fieldCamera.pitch };
+          camera.yaw = fieldCamera.yaw;
+          camera.targetX = fieldCamera.x;
+          camera.targetY = fieldCamera.y;
+          return;
+        }
         const now = performance.now();
         if (!chaseLook.held && chaseLook.updatedAt) {
           const decay = Math.exp(-Math.max(0, (now - chaseLook.updatedAt) / 1000) * 1.8);
@@ -3763,20 +3821,56 @@
       let homeBusy = false;
       const fielderLabel = (fielder) => (fielder.pos === "C" && homeBusy ? "" : fielder.name || fielder.pos);
       const nearHome = (point) => Math.hypot(point.x, point.y) < 10;
+      const PLAYER_HEIGHT = 6;
+      const PLAYER_RADIUS = 0.85;
+      function actorPoint(point, height) {
+        let pose = point.pose;
+        const play = gameState.play;
+        if (!pose && play && play.fielder && play.fielder.pos === point.pos) {
+          pose = FieldingMotion.pose(play.fielder.move, (performance.now() - play.start) / 1000 - play.lead);
+        }
+        if (!pose) return { x: point.x, y: point.y, z: height };
+        return {
+          x: point.x + pose.dx * height * Math.sin(pose.tilt),
+          y: point.y + pose.dy * height * Math.sin(pose.tilt),
+          z: pose.z + height * Math.cos(pose.tilt)
+        };
+      }
       function drawGameActor(point, color, label, width, height, below) {
         const tc = gameState.colors;
         if (tc) color = color === "#2b6fa6" ? tc.field : color === "#1b4f7c" ? tc.field : color === "#d27637" || color === "#6b5a8c" ? tc.bat : color;
-        const screen = worldToScreen({ x: point.x, y: point.y, z: 3 }, width, height);
-        if (chaseCamera && (screen.depth < 0.5 || screen.x < -60 || screen.x > width + 60 || screen.y < -60 || screen.y > height + 60)) return;
-        const radius = chaseCamera ? Math.max(3, Math.min(45, Math.min(width, height) * 0.14 / screen.depth)) : Math.max(3, 4.2 * Math.sqrt(camera.scale));
-        context.beginPath();
-        context.arc(screen.x, screen.y, radius, 0, Math.PI * 2);
-        context.fillStyle = color;
-        context.fill();
-        context.lineWidth = 1.2;
-        context.strokeStyle = "#fffefa";
-        context.stroke();
+        const yaw = chaseCamera ? chaseCamera.yaw + chaseLook.yaw : camera.yaw;
+        const rightX = Math.cos(yaw), rightY = -Math.sin(yaw);
+        const silhouette = (spread) => {
+          const points = [];
+          for (const sign of [-1, 1]) {
+            for (let i = 0; i <= 24; i += 1) {
+              const t = sign < 0 ? i / 24 : 1 - i / 24;
+              const side = t === 0 || t === 1 ? 0 : sign * PLAYER_RADIUS * spread * Math.pow(Math.sin(t * Math.PI), 0.55);
+              const body = actorPoint(point, t * PLAYER_HEIGHT);
+              points.push({ x: body.x + rightX * side, y: body.y + rightY * side, z: body.z });
+            }
+          }
+          return points;
+        };
+        const foot = worldToScreen(actorPoint(point, 0), width, height);
+        const head = worldToScreen(actorPoint(point, PLAYER_HEIGHT), width, height);
+        const blur = Math.max(0.4, Math.min(3, Math.hypot(head.x - foot.x, head.y - foot.y) * 0.012));
+        context.save();
+        context.globalAlpha = 0.3;
+        context.filter = `blur(${blur * 3}px)`;
+        drawWorldPolygon(silhouette(0.75), color, null, width, height);
+        context.globalAlpha = 1;
+        context.filter = `blur(${blur}px)`;
+        drawWorldPolygon(silhouette(0.75), color, null, width, height);
+        context.filter = "none";
+        drawWorldPolygon(silhouette(0.54), color, null, width, height);
+        context.restore();
         if (label) {
+          const anchor = actorPoint(point, below ? 0 : PLAYER_HEIGHT);
+          const screen = worldToScreen(anchor, width, height);
+          if (chaseCamera && (screen.depth < 0.5 || screen.x < -60 || screen.x > width + 60 || screen.y < -60 || screen.y > height + 60)) return;
+          const radius = 3;
           const spot = placeLabel(label, screen.x, screen.y, radius, below);
           context.font = "700 9px system-ui, sans-serif";
           context.textAlign = "center";
@@ -3830,7 +3924,7 @@
           homeBusy = frame.pre != null || frame.runners.some((runner) => !runner.scored && nearHome(runner));
           drawGameActor(fielder, fielder.has ? "#1b4f7c" : "#2b6fa6", fielderLabel(fielder), width, height);
           if (fielder.has) {
-            const s = worldToScreen({ x: fielder.x, y: fielder.y, z: 3 }, width, height);
+            const s = worldToScreen(actorPoint(fielder, 3), width, height);
             if (chaseCamera && s.depth < 0.5) continue;
             context.beginPath();
             context.arc(s.x, s.y, Math.max(6, 7.5 * Math.sqrt(camera.scale)), 0, Math.PI * 2);
@@ -4045,7 +4139,7 @@
             const a = track[i];
             const b = track[Math.min(i + 1, track.length - 1)];
             const k = b[0] > a[0] ? Math.min(1, (t - a[0]) / (b[0] - a[0])) : 0;
-            drawGameActor({ x: a[1] + (b[1] - a[1]) * k, y: a[2] + (b[2] - a[2]) * k }, "#2b6fa6", fielderLabel(fielder), width, height);
+            drawGameActor({ pos: fielder.pos, x: a[1] + (b[1] - a[1]) * k, y: a[2] + (b[2] - a[2]) * k }, "#2b6fa6", fielderLabel(fielder), width, height);
             continue;
           }
           if (play && play.fielder && play.fielder.pos === fielder.pos) {
@@ -4175,6 +4269,7 @@
         if (data.type === "gm-camera" && event.source === window.parent) {
           setGameCamera(data.mode);
           render3D();
+          if (gameCameraMode === "field") canvas.focus({ preventScroll: true });
         } else if (data.type === "gm-park") {
           if (!PARKS.some((park) => park.id === data.park) || data.park === selectedStadiumId) return;
           selectedStadiumId = data.park;
@@ -4357,7 +4452,7 @@
 
       // Reproject the original park image in screen-aligned strips to avoid mesh seams.
       function drawChaseGround(image, reference, width, height) {
-        const focal = Math.min(width, height) * 0.8;
+        const focal = Math.min(width, height) * 0.8 * (gameCameraMode === "field" ? fieldCamera.zoom : 1);
         const { eye } = chaseCamera;
         const yaw = chaseCamera.yaw + chaseLook.yaw;
         const pitch = Math.max(-1.56, Math.min(1.56, chaseCamera.pitch + chaseLook.pitch));
@@ -4782,6 +4877,12 @@
       }
 
       function zoomCamera(factor) {
+        if (IS_GAME && gameCameraMode === "field") {
+          fieldCamera.zoom = Math.max(0.5, Math.min(3, fieldCamera.zoom * factor));
+          saveFieldCamera();
+          render3D();
+          return;
+        }
         if (zoomFollowCamera(factor)) {
           render3D();
           return;
@@ -4792,6 +4893,13 @@
       }
 
       function panCameraByPixels(deltaX, deltaY) {
+        if (IS_GAME && gameCameraMode === "field") {
+          fieldCamera.yaw += deltaX * .008;
+          fieldCamera.x -= Math.sin(fieldCamera.yaw) * deltaY * .15;
+          fieldCamera.y -= Math.cos(fieldCamera.yaw) * deltaY * .15;
+          saveFieldCamera();
+          return;
+        }
         takeCameraControl();
         const bounds = canvas.getBoundingClientRect();
         const scale = bounds.width * camera.scale / 700;
@@ -4874,6 +4982,9 @@
           followLook: event.button === 0 && !event.shiftKey && beginChaseLook(),
           lookYaw: chaseLook.yaw,
           lookPitch: chaseLook.pitch,
+          fieldLook: IS_GAME && gameCameraMode === "field",
+          fieldYaw: fieldCamera.yaw,
+          fieldPitch: fieldCamera.pitch,
           mode: event.button !== 0 || event.shiftKey ? "pan" : "orbit",
           moved: false
         };
@@ -4885,6 +4996,12 @@
         const deltaY = event.clientY - dragState.startY;
         if (Math.abs(deltaX) + Math.abs(deltaY) > 4) dragState.moved = true;
         if (!dragState.moved) return;
+        if (dragState.fieldLook && gameCameraMode === "field") {
+          fieldCamera.yaw = dragState.fieldYaw - deltaX * .008;
+          fieldCamera.pitch = Math.max(-1.3, Math.min(1.3, dragState.fieldPitch - deltaY * .006));
+          render3D();
+          return;
+        }
         if (dragState.followLook && chaseLook.held) {
           chaseLook.yaw = Math.atan2(Math.sin(dragState.lookYaw - deltaX * .008), Math.cos(dragState.lookYaw - deltaX * .008));
           chaseLook.pitch = Math.max(-1.2, Math.min(1.2, dragState.lookPitch + deltaY * .006));
@@ -4908,15 +5025,34 @@
         const interactionMode = dragState.mode;
         dragState = null;
         endChaseLook();
+        if (gameCameraMode === "field") saveFieldCamera();
         if (!IS_GAME && !wasDragged && interactionMode === "orbit" && event.button === 0) {
           const location = canvasPointToWorld(event.clientX, event.clientY);
           setAim(location.x, location.y);
         }
       });
-      const releaseCameraDrag = () => { dragState = null; endChaseLook(); };
+      const releaseCameraDrag = () => {
+        dragState = null;
+        endChaseLook();
+        if (gameCameraMode === "field") saveFieldCamera();
+      };
       canvas.addEventListener("pointercancel", releaseCameraDrag);
       canvas.addEventListener("lostpointercapture", releaseCameraDrag);
       window.addEventListener("blur", releaseCameraDrag);
+      window.addEventListener("blur", stopFieldWalk);
+      document.addEventListener("visibilitychange", () => { if (document.hidden) stopFieldWalk(); });
+      window.addEventListener("keydown", (event) => {
+        if (!IS_GAME || gameCameraMode !== "field" || !["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
+        if (event.target instanceof HTMLElement && event.target.closest("input, select, textarea, [contenteditable=true]")) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        startFieldWalk(event.key);
+      }, true);
+      window.addEventListener("keyup", (event) => {
+        if (!fieldKeys.delete(event.key)) return;
+        event.preventDefault();
+        if (!fieldKeys.size) stopFieldWalk();
+      });
       canvas.addEventListener("contextmenu", (event) => event.preventDefault());
       canvas.addEventListener("wheel", (event) => {
         event.preventDefault();

@@ -9,6 +9,7 @@ const messages = [];
 const stored = {};
 let now = 1000;
 const context = vm.createContext({
+  FieldingMotion: require('./fielding-motion.js'),
   performance: { now: () => now },
   localStorage: { setItem: (key, value) => { stored[key] = value; } },
   requestAnimationFrame: () => 1,
@@ -21,6 +22,9 @@ vm.runInContext(`
   let freeCamera = { ...camera };
   let gameCameraMode = "free", cameraUpdatedAt = 0, cameraRunner = null;
   let chaseCamera = null;
+  const fieldCamera = {x:0,y:-12,z:5.5,yaw:0,pitch:-0.08,zoom:1};
+  const fieldKeys = new Set();
+  let fieldWalkRaf = 0, fieldWalkAt = 0;
   const chaseLook = {yaw:0,pitch:0,held:false,updatedAt:0,raf:0};
   const MAX_ELEVATION = 1.55;
   const chaseDistances = {runner:12,ball:18};
@@ -174,4 +178,54 @@ assert(Object.values(c).every(Number.isFinite), 'Non-live plays and replays also
 run('gameState.play.runners = [{from:0,to:1,delay:0,perBase:4,name:"Hitter"},{from:2,to:3,delay:0,perBase:4,name:"Lead"}];');
 update('runner');
 assert(run('cameraAction().runner.x >= 0'), 'Replay follows hitter rather than lead runner');
-console.log('Passed: seven modes, 3 ft chase distance, independent persistent zoom, hitter tracking around bases, ball travel/throw headings, ground texture projection, near-plane clipping, fixed views and manual override.');
+const beforeField = update('free');
+update('field');
+assert.equal(run('chaseCamera.eye.z'),5.5,'Field mode uses eye-level perspective');
+run('fieldKeys.add("ArrowUp");moveFieldCamera(1);fieldKeys.clear();');
+assert.equal(run('fieldCamera.y'),12,'Up walks forward at 24 feet/sec');
+run('fieldKeys.add("ArrowRight");moveFieldCamera(Math.PI/3);fieldKeys.clear();');
+assert(Math.abs(run('fieldCamera.yaw')-Math.PI/2)<1e-8,'Right turns the walker');
+run('fieldKeys.add("ArrowUp");moveFieldCamera(1);fieldKeys.clear();');
+assert(Math.abs(run('fieldCamera.x')-24)<1e-8,'Forward movement follows the new heading');
+run('fieldKeys.add("ArrowDown");moveFieldCamera(1);fieldKeys.clear();');
+assert(Math.abs(run('fieldCamera.x'))<1e-8,'Down walks backward');
+run('fieldKeys.add("ArrowUp");fieldKeys.add("ArrowDown");moveFieldCamera(1);fieldKeys.clear();');
+assert.equal(run('fieldCamera.y'),12,'Opposing movement keys cancel');
+run('fieldCamera.pitch=0.3;zoomCamera(1.2);');
+assert.equal(run('gameCameraMode'),'field','Zoom retains field mode');
+assert.equal(run('fieldCamera.zoom'),1.2);
+assert.equal(JSON.parse(stored['field-notes-field-camera']).y,12,'Walker position is persisted');
+update('field');
+assert.equal(run('chaseCamera.pitch'),0.3,'Field view retains manual look instead of auto-returning');
+run('drawChaseGround({}, {width:768,height:768},960,720);');
+const ahead = run('worldToScreen({x:fieldCamera.x+Math.sin(fieldCamera.yaw)*30,y:fieldCamera.y+Math.cos(fieldCamera.yaw)*30,z:fieldCamera.z},960,720)');
+assert(Math.abs(ahead.x-480)<1e-6 && ahead.depth>0.5,'Field projection faces the walker heading');
+run('gameState.play=null;gameState.live=null;');
+update('field');
+assert.equal(run('chaseCamera.eye.y'),12,'Play changes do not teleport the walker');
+run('startFieldWalk("ArrowUp");stopFieldWalk();');
+assert.equal(run('fieldKeys.size'),0,'Release/blur clears walking keys');
+assert.equal(run('fieldWalkRaf'),0,'Release/blur stops walking animation');
+assert.deepEqual(update('free'),beforeField,'Exiting field mode restores the Free camera');
+vm.runInContext(html.slice(html.indexOf('      let labelRects ='),html.indexOf('      function liveThrowPoint(')),context);
+const jumpActor = run('actorPoint({x:20,y:40,pose:{z:2,tilt:0,dx:0,dy:1}},6)');
+assert.equal(jumpActor.z,8,'Jump animation lifts the whole 6-foot figure');
+const diveActor = run('actorPoint({x:20,y:40,pose:{z:0,tilt:1.25,dx:1,dy:0}},6)');
+assert(Math.abs(diveActor.x-(20+6*Math.sin(1.25)))<1e-8,'Dive animation extends the figure in the dive direction');
+assert(Math.abs(diveActor.z-6*Math.cos(1.25))<1e-8,'Dive animation lowers the figure toward the ground');
+const wispLayers = [];
+context.drawWorldPolygon = (points, fill) => wispLayers.push({points,fill});
+for (const mode of ['free','runner','ball','field','high','first','third','action']) {
+  update(mode);
+  wispLayers.length = 0;
+  run('gameState.colors={field:"#123456",bat:"#654321"};drawGameActor({x:20,y:40,z:50},"#2b6fa6","",960,720);');
+  assert.equal(wispLayers.length,3,`${mode}: placeholder has a faint halo, soft edge and solid center`);
+  const vertices = wispLayers.flatMap((face)=>face.points);
+  assert.equal(Math.min(...vertices.map((p)=>p.z)),0,`${mode}: wisp touches ground`);
+  assert.equal(Math.max(...vertices.map((p)=>p.z)),6,`${mode}: wisp is exactly 6 feet tall`);
+  assert(vertices.filter((p)=>p.z===0).every((p)=>p.x===20&&p.y===40),`${mode}: wisp tapers to player location`);
+  assert(vertices.every((p)=>Number.isFinite(p.x)&&Number.isFinite(p.y)&&Number.isFinite(p.z)),`${mode}: finite curved silhouette`);
+  assert(wispLayers.some((face)=>face.fill==='#123456'),`${mode}: team color preserved`);
+  assert(!wispLayers.some((face)=>face.fill==='#fffefa'),`${mode}: no bright inner core`);
+}
+console.log('Passed: eight camera modes, field walking/turning, eye-level projection, position persistence, blur/release cleanup, restored Free view, chase distance/zoom, look-around return, ball headings and clipping.');
