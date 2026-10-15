@@ -7,7 +7,7 @@ const { createRequire } = require('node:module');
 const filename = path.join(__dirname, 'game-engine.js');
 const sandbox = { module: { exports: {} }, require: createRequire(filename) };
 vm.runInNewContext(fs.readFileSync(filename, 'utf8').replace('const GameEngine = {',
-  'const GameEngine = { createLivePlay, defenseList, fieldBall, readFieldingRoutes, observedBall, throwMotion, throwSpread, transferSecs, flightSecs, seg, toFirst,'
+  'const GameEngine = { createLivePlay, defenseList, fieldBall, fieldProfile, readTarget, readFieldingRoutes, observedBall, throwMotion, throwSpread, transferSecs, flightSecs, seg, toFirst,'
 ), sandbox, { filename });
 const E = sandbox.module.exports;
 function game() {
@@ -59,6 +59,52 @@ for(const d of defenders) {
 }
 assert(originalRoutes.SS.some((p,i)=>p[0]>1.2&&Math.hypot(p[1]-changedRoutes.SS[i][1],p[2]-changedRoutes.SS[i][2])>1),
   'Fielders correct routes after observing changed ball path');
+const trackingReports = [];
+for (const field of [20,50,90]) {
+  const fp = E.fieldProfile({field,speed:50,arm:50});
+  let error = 0, previousError = 0, samples = 0;
+  for (const ev of [80,95,110]) for (const la of [22,35,50]) for (const dir of [-25,0,25])
+    for (const spin of [{b:1,s:0},{b:0.6,s:0.8}]) for (const wind of [{x:0,y:0},{x:12,y:-8}]) {
+      const fly = E.flightSim(ev,la,dir,g.park,{spin,wind,noFence:true});
+      const landing = fly.pts[fly.firstLand];
+      if (!landing) continue;
+      for (const time of [0.6,1.2,2]) {
+        if (time > landing.t-0.4) continue;
+        const index = fly.pts.findIndex(p=>p.t>=time);
+        const read = E.observedBall(fly,index,fp);
+        const target = E.readTarget(read,{x:0,y:300,fp},time);
+        const falling = (read.vz+Math.sqrt(read.vz**2+2*32.174*read.z))/32.174;
+        const drift = (1-Math.exp(-0.12*(Math.min(3,falling)+read.age)))/0.12;
+        error += Math.hypot(target.x-landing.x,target.y-landing.y);
+        previousError += Math.hypot(read.x+read.vx*drift-landing.x,read.y+read.vy*drift-landing.y);
+        samples++;
+      }
+    }
+  const mean = error/samples, previousMean = previousError/samples;
+  assert(Number.isFinite(mean) && mean<previousMean*0.75,'Observed drag/curve improves flight reads over coarse extrapolation');
+  assert(mean>1,'Tracking remains imperfect, not exact future landing knowledge');
+  trackingReports.push({field,meanError:+mean.toFixed(2),coarseError:+previousMean.toFixed(2),samples});
+}
+assert(trackingReports[2].meanError<trackingReports[0].meanError*0.9,'High FLD meaningfully improves flight estimates');
+assert(trackingReports[1].meanError<trackingReports[0].meanError && trackingReports[2].meanError<trackingReports[1].meanError);
+const low = E.fieldProfile({field:20,speed:50,arm:50}), high = E.fieldProfile({field:90,speed:50,arm:50});
+assert(high.react<low.react,'High FLD reads contact sooner');
+assert.equal(high.vmax,low.vmax,'Tracking skill does not change running speed');
+const fly = E.flightSim(95,35,15,g.park,{noFence:true});
+const redirected = {...fly,pts:fly.pts.map(p=>p.t<=1.2?{...p}:{...p,x:p.x+15})};
+for (const fp of [low,high]) {
+  const observer = {...defenders.find(f=>f.pos==='CF'),fp};
+  const route = E.readFieldingRoutes(fly,[observer],g.park).CF;
+  const other = E.readFieldingRoutes(redirected,[observer],g.park).CF;
+  assert.deepEqual(route.filter(p=>p[0]<=1.2),other.filter(p=>p[0]<=1.2),'Air tracking cannot see future curvature or landing');
+  for (let i=1;i<route.length;i++) {
+    assert(route[i].slice(1).every(Number.isFinite),'Flight routes stay finite');
+    assert(Math.hypot(route[i][1]-route[i-1][1],route[i][2]-route[i-1][2])<=fp.vmax*(route[i][0]-route[i-1][0])+1e-8);
+  }
+  const index=fly.pts.findIndex(p=>p.t>=1);
+  assert(E.observedBall(fly,index,fp).age>0,'Even elite tracking uses delayed observations');
+}
+console.table(trackingReports);
 const reports=[];
 let movingReleases=0;
 for(const dir of [-30,-20,-10,0,10,20,30]) {
@@ -93,4 +139,4 @@ const shortstopRace=reports.find(r=>r.dir===-10);
 assert(shortstopRace.feet>80 || shortstopRace.first!==null,'Difficult SS play produces a close race or a safe runner');
 assert(movingReleases>=2,'Upright fielders can carry pickup momentum through release');
 console.table(reports);
-console.log('Passed: runner timing, moving-throw penalties, causal route prefixes and observed route corrections.');
+console.log('Passed: runner timing, moving-throw penalties, causal routes, improved flight estimates and FLD-based tracking.');

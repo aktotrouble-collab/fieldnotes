@@ -567,13 +567,16 @@
   }
 
   function fieldProfile(player) {
-    // SPD sets running range, ARM sets throw velocity, FLD sets fielding technique.
+    // SPD sets running range, ARM sets throw velocity, FLD sets tracking and fielding technique.
     // Fielders accelerate like runners do (see RAMP_TIME) but top out a little slower.
     const vmax = 0.88 * 90 / (2.95 - 0.012 * (player.speed - 50));
+    const field = Math.max(0, player.field === undefined ? 50 : player.field);
+    const tracking = field / (field + 50);
     return {
       speed: vmax * 0.78,
       vmax,
-      react: 0.5,
+      react: 0.38 + 0.2 * (1 - tracking),
+      tracking,
       reach: motion.ARM_REACH,
       height: playerHeight(player),
       ability: motion.profile(player.field === undefined ? 50 : player.field),
@@ -851,32 +854,73 @@
 
   function observedBall(ball, index, fp) {
     const pts = ball.pts, now = pts[index].t;
-    const skill = fp.ability ? 1.5 - fp.ability.recovery : 0.5;
-    const lag = 0.06 + (1 - skill) * 0.1;
+    const skill = fp.tracking === undefined ? 0.5 : fp.tracking;
+    const lag = 0.04 + (1 - skill) * 0.08;
     let seen = index;
     while (seen > 0 && pts[seen].t > now - lag) seen--;
     let before = seen;
     while (before > 0 && pts[seen].t - pts[before].t < 0.1) before--;
-    const p = pts[seen], a = pts[before], dt = Math.max(1 / 120, p.t - a.t);
-    const vx = (p.x - a.x) / dt, vy = (p.y - a.y) / dt, vz = (p.z - a.z) / dt;
-    return { x: p.x, y: p.y, z: p.z, vx, vy, vz, age: now - p.t, skill };
+    let earlier = before;
+    while (earlier > 0 && pts[before].t - pts[earlier].t < 0.1) earlier--;
+    const p = pts[seen], a = pts[before], b = pts[earlier];
+    const dt = Math.max(1 / 120, p.t - a.t), prevDt = Math.max(1 / 120, a.t - b.t);
+    let vx = (p.x - a.x) / dt, vy = (p.y - a.y) / dt, vz = (p.z - a.z) / dt;
+    const span = (dt + prevDt) / 2;
+    const smooth = earlier < before && b.z > 0 && a.z > 0 && p.z > 0;
+    const ax = smooth ? (vx - (a.x - b.x) / prevDt) / span : 0;
+    const ay = smooth ? (vy - (a.y - b.y) / prevDt) / span : 0;
+    const az = smooth ? (vz - (a.z - b.z) / prevDt) / span : -BALL.g;
+    if (smooth && az < 0) {
+      vx += ax * dt / 2; vy += ay * dt / 2; vz += az * dt / 2;
+    }
+    return { x: p.x, y: p.y, z: p.z, vx, vy, vz, ax, ay, az, age: now - p.t, skill };
+  }
+
+  // Infer drag and curvature from already-seen motion, never from future flight samples.
+  function projectRead(read, seconds = 8) {
+    let { x, y, z, vx, vy, vz } = read;
+    const speed = Math.hypot(vx, vy, vz), cube = Math.max(1, speed ** 3);
+    const ax = read.ax, ay = read.ay, az = read.az + BALL.g;
+    const drag = clamp(-(ax * vx + ay * vy + az * vz) / cube, 0, 0.004);
+    const wx = (vy * az - vz * ay) / cube;
+    const wy = (vz * ax - vx * az) / cube;
+    const wz = (vx * ay - vy * ax) / cube;
+    let t = 0;
+    while (t < seconds && z > 0) {
+      const dt = Math.min(1 / 30, seconds - t), v = Math.hypot(vx, vy, vz);
+      const nx = vx + v * (-drag * vx + wy * vz - wz * vy) * dt;
+      const ny = vy + v * (-drag * vy + wz * vx - wx * vz) * dt;
+      const nz = vz + (-BALL.g + v * (-drag * vz + wx * vy - wy * vx)) * dt;
+      const nextZ = z + nz * dt;
+      const step = nextZ < 0 ? dt * z / (z - nextZ) : dt;
+      x += nx * step; y += ny * step; z = Math.max(0, z + nz * step);
+      vx = nx; vy = ny; vz = nz; t += dt;
+    }
+    return { x, y, z };
   }
 
   function readTarget(read, fielder, time) {
     const distance = Math.hypot(read.x - fielder.x, read.y - fielder.y);
-    const falling = (read.vz + Math.sqrt(read.vz * read.vz + 2 * 32.174 * Math.max(0, read.z))) / 32.174;
     const horizontalSpeed2 = read.vx * read.vx + read.vy * read.vy;
     const approach = horizontalSpeed2 > 1
       ? ((fielder.x - read.x) * read.vx + (fielder.y - read.y) * read.vy) / horizontalSpeed2 - read.age : 0;
-    const horizon = read.z > 7 || read.vz > 8
-      ? Math.min(3, falling)
-      : clamp(approach, 0.08, 2.5);
+    const airborne = read.z > 7 || read.vz > 8;
+    const horizon = clamp(approach, 0.08, 2.5);
     const lead = horizon + read.age;
     const drift = (1 - Math.exp(-0.12 * lead)) / 0.12;
-    const uncertainty = (1 - read.skill) * Math.min(10, distance * 0.06) / (1 + time);
+    const uncertainty = (1 - read.skill) ** 2 * Math.min(12, distance * 0.06) / (1 + time * 0.8);
+    const target = airborne ? projectRead(read) : { x: read.x + read.vx * drift, y: read.y + read.vy * drift };
+    if (airborne) {
+      const falling = (read.vz + Math.sqrt(read.vz * read.vz + 2 * BALL.g * Math.max(0, read.z))) / BALL.g;
+      const coarseDrift = (1 - Math.exp(-0.12 * (Math.min(3, falling) + read.age))) / 0.12;
+      // Weaker readers lean on coarse extrapolation longer before trusting the observed curve.
+      const doubt = 0.4 * (1 - read.skill) / (1 + time * 0.3);
+      target.x += (read.x + read.vx * coarseDrift - target.x) * doubt;
+      target.y += (read.y + read.vy * coarseDrift - target.y) * doubt;
+    }
     return {
-      x: read.x + read.vx * drift + Math.sin(time * 2.1) * uncertainty,
-      y: read.y + read.vy * drift + Math.cos(time * 1.7) * uncertainty
+      x: target.x + Math.sin(time * 2.1) * uncertainty,
+      y: target.y + Math.cos(time * 1.7) * uncertainty
     };
   }
 
@@ -892,7 +936,7 @@
         if (time >= nextRead) {
           const read = observedBall(ball, index, f.fp);
           f.target = readTarget(read, f, time);
-          nextRead = time + 0.09 + (1 - read.skill) * 0.12;
+          nextRead = time + 0.07 + (1 - read.skill) * 0.14;
         }
         if (time >= f.fp.react) {
           const dx = f.target.x - f.x, dy = f.target.y - f.y, distance = Math.hypot(dx, dy);
@@ -976,9 +1020,9 @@
                 const startIndex = Math.max(0, Math.floor(plan.move.start * 120));
                 const read = observedBall(ball, Math.min(index, startIndex), fielder.fp);
                 const ahead = point.t - (pts[Math.min(index, startIndex)].t - read.age);
-                const predictedZ = Math.max(0, read.z + read.vz * ahead - 16.087 * ahead * ahead);
-                const predictedX = read.x + read.vx * ahead, predictedY = read.y + read.vy * ahead;
-                if (Math.abs(predictedZ - point.z) > 2 || Math.hypot(predictedX - point.x, predictedY - point.y) > 5
+                const predicted = read.z > 0 ? projectRead(read, ahead)
+                  : { x: read.x + read.vx * ahead, y: read.y + read.vy * ahead, z: 0 };
+                if (Math.abs(predicted.z - point.z) > 2 || Math.hypot(predicted.x - point.x, predicted.y - point.y) > 5
                   || Math.hypot(plan.body.x - at[1], plan.body.y - at[2]) > fielder.fp.ability.dive) plan = null;
               }
             }

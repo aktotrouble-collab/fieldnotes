@@ -117,6 +117,47 @@
     #pitch-result[data-kind="b"] { color:#7bd49a; }
     #pitch-result[data-kind="s"] { color:#ff8a6b; }
     #pitch-result[data-kind="f"] { color:#f2c14e; }
+    #hr-celebration { position:absolute; right:22px; bottom:28px; width:min(510px,calc(100% - 32px)); z-index:5; pointer-events:none; color:#fff9e9; }
+    #hr-celebration[hidden] { display:none; }
+    .hr-card { position:relative; overflow:hidden; padding:26px 30px 24px; border:1px solid #c5aa665c; border-radius:3px 24px 3px 3px; background:linear-gradient(125deg,#102e29f5,#081d1af5 70%); box-shadow:0 16px 55px #0006; isolation:isolate; }
+    .hr-card::before { content:""; position:absolute; inset:0; z-index:-1; background:repeating-linear-gradient(0deg,transparent 0 4px,#ffffff03 4px 5px); }
+    .hr-card::after { content:""; position:absolute; left:0; top:0; bottom:0; width:4px; background:#e9bd64; transform-origin:bottom; }
+    .hr-orbit { position:absolute; width:310px; height:310px; right:-130px; top:-145px; border:1px solid #e9bd6426; border-radius:50%; box-shadow:0 0 0 32px #e9bd6408,0 0 0 64px #e9bd6408; z-index:-1; }
+    .hr-kicker { display:flex; justify-content:space-between; gap:12px; font:700 10px/1.4 system-ui,sans-serif; letter-spacing:.23em; text-transform:uppercase; color:#e9bd64; }
+    .hr-flight { display:block; width:100%; height:48px; margin:8px 0 -4px; overflow:visible; }
+    .hr-flight .hr-guide { stroke:#fff9e91a; stroke-width:1; }
+    .hr-flight .hr-arc { stroke:#e9bd64; stroke-width:2; fill:none; stroke-dasharray:1; stroke-dashoffset:1; }
+    .hr-flight .hr-star { transform-box:fill-box; transform-origin:center; fill:#fff9e9; }
+    .hr-title { position:relative; margin:0; font:italic 900 clamp(42px,5.4vw,76px)/.96 Georgia,"Times New Roman",serif; letter-spacing:-.065em; }
+    .hr-title span { display:block; }
+    .hr-title .hr-run { padding-left:64px; color:#e9bd64; }
+    .hr-name { margin:15px 0 18px; font:500 13px/1.4 system-ui,sans-serif; letter-spacing:.04em; overflow-wrap:anywhere; color:#e0e8df; }
+    .hr-stats { display:grid; grid-template-columns:1fr 1fr 1.25fr; gap:12px; border-top:1px solid #d6d9bc38; padding-top:15px; }
+    .hr-stat + .hr-stat { border-left:1px solid #d6d9bc26; padding-left:15px; }
+    .hr-stat-label { display:block; font:700 10px/1.4 system-ui,sans-serif; color:#a8c4b7; letter-spacing:.14em; }
+    .hr-stat-value { display:inline-block; margin-top:4px; font:600 clamp(23px,3vw,34px)/1.2 system-ui,sans-serif; letter-spacing:-.05em; font-variant-numeric:tabular-nums; }
+    .hr-stat-unit { font:500 10px/1 system-ui,sans-serif; color:#a8c4b7; letter-spacing:.04em; margin-left:4px; }
+    .hr-active { animation:hr-depart 6.2s both; }
+    .hr-active .hr-card { animation:hr-arrive .7s cubic-bezier(.16,1,.3,1) both; }
+    .hr-active .hr-card::after { animation:hr-rule .65s .15s both; }
+    .hr-active .hr-arc { animation:hr-trace 1s .2s ease-out forwards; }
+    .hr-active .hr-star { animation:hr-star .5s .95s both; }
+    .hr-active .hr-title span { animation:hr-type .65s .25s cubic-bezier(.16,1,.3,1) both; }
+    .hr-active .hr-title .hr-run { animation-delay:.4s; }
+    .hr-active .hr-name { animation:hr-type .6s .55s both; }
+    .hr-active .hr-stat { animation:hr-type .5s .75s both; }
+    .hr-active .hr-stat:nth-child(2) { animation-delay:.9s; }
+    .hr-active .hr-stat:nth-child(3) { animation-delay:1.05s; }
+    @keyframes hr-arrive { from { opacity:0; transform:translateY(28px) rotate(1deg); clip-path:inset(100% 0 0); } to { opacity:1; transform:none; clip-path:inset(0); } }
+    @keyframes hr-type { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:none; } }
+    @keyframes hr-rule { from { transform:scaleY(0); } to { transform:scaleY(1); } }
+    @keyframes hr-trace { to { stroke-dashoffset:0; } }
+    @keyframes hr-star { from { opacity:0; transform:scale(0) rotate(-90deg); } to { opacity:1; transform:scale(1) rotate(0); } }
+    @keyframes hr-depart { 0%,88% { opacity:1; transform:none; } 100% { opacity:0; transform:translateY(12px); } }
+    @media (prefers-reduced-motion:reduce) {
+      #hr-celebration, #hr-celebration * { animation:none !important; }
+      #hr-celebration .hr-arc { stroke-dashoffset:0; }
+    }
     @media (max-width:700px) {
       #bug { font-size:11px; max-width:calc(100% - 20px); }
       #bug .b-row { padding:4px 7px; gap:6px; }
@@ -127,6 +168,13 @@
       #zone-overlay { width:210px; padding:5px; left:6px; bottom:56px; }
       #zone-mini { left:6px; bottom:56px; }
       #pitch-result { font-size:24px; }
+      #hr-celebration { right:10px; bottom:14px; width:min(360px,calc(100% - 20px)); }
+      .hr-card { padding:17px 20px; }
+      .hr-flight { height:30px; }
+      .hr-title { font-size:48px; }
+      .hr-name { margin:10px 0 12px; }
+      .hr-stats { padding-top:10px; gap:8px; }
+      .hr-kicker { font-size:9px; letter-spacing:.15em; }
       main { padding-left:8px; padding-right:8px; }
     }
     #aim-types { display:flex; gap:5px; flex-wrap:wrap; margin-top:6px; }
@@ -260,6 +308,24 @@
             <div id="field-wrap">
               <iframe id="field-frame" title="3D field" src="index.html?embed=1&amp;game=1&amp;park=dodgers" style="width:100%;height:clamp(640px,78vh,960px);border:0;border-radius:8px;display:block"></iframe>
               <div id="bug"></div>
+              <div id="hr-celebration" hidden role="status" aria-live="polite" aria-atomic="true">
+                <div class="hr-card">
+                  <div class="hr-orbit" aria-hidden="true"></div>
+                  <div class="hr-kicker"><span>Field Notes / Flight Report</span><span id="hr-tag">Over the wall</span></div>
+                  <svg class="hr-flight" viewBox="0 0 440 48" aria-hidden="true">
+                    <path class="hr-guide" d="M0 45H440"/>
+                    <path class="hr-arc" pathLength="1" d="M6 44Q165 -27 400 19"/>
+                    <path class="hr-star" d="M400 11l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"/>
+                  </svg>
+                  <div class="hr-title" aria-label="Home run"><span>HOME</span><span class="hr-run">RUN.</span></div>
+                  <div class="hr-name" id="hr-batter"></div>
+                  <div class="hr-stats">
+                    <div class="hr-stat"><span class="hr-stat-label">EV / Exit velo</span><strong class="hr-stat-value" id="hr-ev"></strong><span class="hr-stat-unit">MPH</span></div>
+                    <div class="hr-stat"><span class="hr-stat-label">LA / Launch</span><strong class="hr-stat-value" id="hr-la"></strong><span class="hr-stat-unit">DEG</span></div>
+                    <div class="hr-stat"><span class="hr-stat-label">DIS / Distance</span><strong class="hr-stat-value" id="hr-distance"></strong><span class="hr-stat-unit">FT</span></div>
+                  </div>
+                </div>
+              </div>
               <details id="camera-options">
                 <summary aria-label="Camera options" title="Camera options"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 7h4l2-3h6l2 3h4v13H3z"/><circle cx="12" cy="13" r="4"/></svg></summary>
                 <div id="camera-content">
@@ -1488,7 +1554,7 @@
       clearTimeout(revealTimer);
       clearTimeout(autoTimer);
       autoPaused = false;
-      clearTimeout(hrTimer);
+      clearHomeRun();
       flight = null;
       holdView = false;
       $("zone-mini").classList.remove("on");
@@ -1524,22 +1590,33 @@
       holdView = true;
       refresh();
       const ms = playBall(saved.ball, saved.play, saved.snap, saved.pitch);
-      hrPopup(saved);
       revealTimer = setTimeout(() => { holdView = false; if (pendingBanner) $("banner").textContent = pendingBanner; pendingBanner = ""; refresh(); }, ms);
     }
 
     let hrTimer = null;
-    function hrPopup(saved) {
-      if (!saved.ball.hr) return;
-      const at = (preRoll(saved.pitch) + (saved.ball.pts.length ? saved.ball.pts[saved.ball.pts.length - 1].t : 3)) * 1000;
+    let hrHideTimer = null;
+    function clearHomeRun() {
       clearTimeout(hrTimer);
+      clearTimeout(hrHideTimer);
+      const overlay = $("hr-celebration");
+      overlay.hidden = true;
+      overlay.classList.remove("hr-active");
+    }
+    function celebrateHomeRun(ball, play, snap, pitch) {
+      clearHomeRun();
+      if (!ball.hr) return;
+      const fencePoint = ball.pts[ball.wallHit >= 0 ? ball.wallHit : ball.pts.length - 1];
+      const at = (preRoll(pitch) + (fencePoint ? fencePoint.t : 3)) * 1000;
       hrTimer = setTimeout(() => {
-        const el = $("pitch-result");
-        el.textContent = saved.ball.pole ? "OFF THE POLE — HOME RUN!" : "HOME RUN!";
-        el.dataset.kind = "f";
-        showOverlay(true);
-        clearTimeout(resultTimer);
-        resultTimer = setTimeout(() => { el.textContent = ""; if (phase === "ready") showOverlay(false); }, 2200);
+        $("hr-batter").textContent = snap.batter;
+        $("hr-tag").textContent = ball.pole ? "Off the pole" : "Over the wall";
+        $("hr-ev").textContent = ball.ev.toFixed(1);
+        $("hr-la").textContent = ball.la.toFixed(1);
+        $("hr-distance").textContent = String(Math.round(E.hitDistance(ball, play || {})));
+        const overlay = $("hr-celebration");
+        overlay.hidden = false;
+        overlay.classList.add("hr-active");
+        hrHideTimer = setTimeout(clearHomeRun, 6200);
       }, at);
     }
 
@@ -1566,7 +1643,6 @@
         if (clip.saved) {
           clearZoneNow();
           const ms = playBall(clip.saved.ball, clip.saved.play, clip.saved.snap, clip.saved.pitch);
-          hrPopup(clip.saved);
           revealTimer = setTimeout(next, ms);
           return;
         }
@@ -1598,7 +1674,7 @@
     function endClips() {
       clipSeq += 1;
       clearTimeout(revealTimer);
-      clearTimeout(hrTimer);
+      clearHomeRun();
       clearTimeout(resultTimer);
       hideMini();
       flight = null;
@@ -2124,6 +2200,7 @@
     const pitchMode = () => pitchControls[1 - game.half];
     const showOverlay = (on) => $("zone-overlay").classList.toggle("on", on);
     function clearZoneNow() {
+      clearHomeRun();
       const box = $("zone-overlay");
       clearTimeout(resultTimer);
       $("pitch-result").textContent = "";
@@ -2245,7 +2322,7 @@
       if (holdView) {
         if (!$("btn-skip").classList.contains("hidden")) endClips();
         clearTimeout(revealTimer);
-        clearTimeout(hrTimer);
+        clearHomeRun();
         holdView = false;
         if (pendingBanner) $("banner").textContent = pendingBanner;
         pendingBanner = "";
@@ -2257,6 +2334,7 @@
     $("btn-pitch").addEventListener("click", () => {
       if (game && !game.over && (holdView || ["challenge", "swinging", "live"].includes(phase))) skipAnimation();
       if (!game || game.over || phase !== "ready" || holdView) return;
+      clearHomeRun();
       hideMini();
       clearTimeout(autoTimer);
       autoPaused = false;
@@ -2936,6 +3014,7 @@
         tracks,
         lead: preRoll(pitch)
       });
+      celebrateHomeRun(ball, play, snap, pitch);
       if (!isReplay) $("banner").innerHTML = "&nbsp;";
       const duration = (preRoll(pitch) + playEnd + 0.1) * 1000;
       if (isReplay) sceneTimer = setTimeout(() => { if (phase === "ready") sendScene(); }, duration);
