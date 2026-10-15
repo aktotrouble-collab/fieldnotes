@@ -2943,7 +2943,8 @@
           && runTime((4 - o.prog) * 90, vmaxOf(o), rampOf(o)) + o.noise < c.tb);
         const ok = cands.filter((c) => c.feasible && (c.forced || c.base === 4 || !scoresFirst(c)));
         if (ok.length) return ok.sort((a, b) => (b.slack + (b.forced ? 0.15 : 0)) - (a.slack + (a.forced ? 0.15 : 0)))[0].base;
-        return winning ? 4 : 'hold';
+        if (winning) return 4;
+        if (INFIELD.has(h.pos)) return 'hold';
       }
       if (winning) return 4;
       const feasible = cands.filter((c) => c.feasible);
@@ -2965,7 +2966,7 @@
       if (INFIELD.has(h.pos) || dist2(h, { x: 0, y: 60 }) < 130) return 'hold';
       const lead = entries.filter((e) => alive(e) && e.state === 'hold' && e.prog >= 1 && e.prog < 4);
       if (!lead.length) return 'hold';
-      return Math.min(4, Math.max(...lead.map((e) => e.prog)) + 1) - (lead.length > 1 ? 0 : 0);
+      return Math.min(4, Math.max(...lead.map((e) => e.prog)) + 1);
     }
 
     function receiverFor(base, thrower) {
