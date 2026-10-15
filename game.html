@@ -1910,7 +1910,7 @@
 
     let pendingRec = null;
 
-    function resolveManual(manual, ctx) {
+    function resolveManual(manual, ctx, defer) {
       const rec = pendingRec || beginRec(E.nextPitch(game));
       const opts = ctx || { ...liveCtl(), human: humanFlags(), hold: true };
       const event = E.stepPitch(game, manual, opts);
@@ -1918,8 +1918,8 @@
         pendingRec = rec;
         const review = E.pendingReview(game, opts);
         const resume = () => {
-          if (event.held === "steal") settle(E.resumeSteal(game, opts), rec);
-          else resolveManual(manual, opts);
+          if (event.held === "steal") (defer || settle)(E.resumeSteal(game, opts), rec);
+          else resolveManual(manual, opts, defer);
         };
         if (review) {
           phase = "challenge";
@@ -1927,7 +1927,7 @@
         }
         return resume();
       }
-      settle(event, rec);
+      (defer || settle)(event, rec);
     }
 
     const CALL_TEXT = { ball: "BALL", "called strike": "STRIKE", "swinging strike": "SWING & MISS", foul: "FOUL" };
@@ -2083,9 +2083,10 @@
       drawZone();
       const cross = timing.start + timing.duration;
       if (timing.swung) {
-        if (now > cross + 650) {
-          const swing = timing.swung.swing;
-          resolveManual(swing);
+        const out = timing.outcome;
+        if (out && now > (timing.contact ? timing.contactAt + 550 : Math.max(cross + 650, timing.swungAt + 400))) {
+          holdView = false;
+          settle(out.event, out.rec);
           return;
         }
       } else if (now > cross + 350) {
@@ -2094,6 +2095,8 @@
       }
       requestAnimationFrame(timingLoop);
     }
+
+    const timingProgress = (t, now) => Math.min(1.4, Math.max(0, (now - t.start) / t.duration));
 
     function swingAt(time, point) {
       if (phase !== "await" || mode() !== "timing" || !timing || timing.swung) return;
@@ -2113,6 +2116,20 @@
       const parts = [Math.abs(ms) < 3 ? "on time" : `${Math.round(Math.abs(ms))} ms ${early ? "early" : "late"}`, vertical, horizontal].filter(Boolean);
       timing.swung = { swing, time, point, text: `${grade} — ${parts.join(" · ")}`, grade };
       feedback = { point, ball: { x: pitch.x, z: pitch.z }, text: timing.swung.text, grade };
+      const t = timing;
+      t.swungAt = performance.now();
+      t.swungP = timingProgress(t, t.swungAt);
+      // The result is decided now; on contact the ball freezes where it was hit, otherwise it flies on through.
+      resolveManual(swing, undefined, (event, rec) => {
+        t.outcome = { event, rec };
+        t.contact = !!(event && (event.live || event.foul || event.ball || event.call === "foul"));
+        phase = "swinging";
+        holdView = true;
+        if (t.contact) {
+          t.contactAt = performance.now();
+          showOverlay(false);
+        }
+      });
     }
     const TIMING_REF = E.TIMING_WINDOW * 0.5;
 
@@ -2209,7 +2226,7 @@
         };
         if (timing) {
           const now = performance.now();
-          const p = Math.min(1.4, Math.max(0, (now - timing.start) / timing.duration));
+          const p = timing.contact ? timing.swungP : timingProgress(timing, now);
           if (now < timing.start) {
             ctx.fillStyle = "#6a7a6f";
             ctx.font = "600 13px system-ui, sans-serif";
@@ -2231,6 +2248,22 @@
               ctx.fill();
             }
             ctx.globalAlpha = 1;
+            if (!timing.contact && p >= 1) {
+              // Shadow of the ball at the perfect timing spot.
+              const ghost = ballAt(1);
+              ctx.globalAlpha = 0.55;
+              ctx.strokeStyle = "#d27637";
+              ctx.lineWidth = 2;
+              ctx.setLineDash([4, 3]);
+              ctx.beginPath();
+              ctx.arc(ghost.x, ghost.y, ghost.r + 1, 0, Math.PI * 2);
+              ctx.stroke();
+              ctx.setLineDash([]);
+              ctx.fillStyle = "#d27637";
+              ctx.globalAlpha = 0.18;
+              ctx.fill();
+              ctx.globalAlpha = 1;
+            }
             const ball = ballAt(p);
             ctx.fillStyle = "#fffefa";
             ctx.strokeStyle = "#1f2a24";
@@ -2365,7 +2398,9 @@
         for (const entry of play.entries) {
           const to = entry.out ? Math.max(entry.start + 1, entry.base) : entry.base;
           if (to <= entry.start) continue;
-          runners.push({ name: entry.r && entry.r.p ? E.shortName(entry.r.p.name) : "", from: entry.start, to: Math.min(to, 4), out: entry.out, delay: entry.start === 0 ? 0.15 : 0.35, perBase: entry.start === 0 ? 3.6 : 3.1 });
+          // On a fly ball, runners tag up and leave only after the catch (or the drop).
+          const tagDelay = play.air && entry.start > 0 && play.time ? play.time + 0.3 : null;
+          runners.push({ name: entry.r && entry.r.p ? E.shortName(entry.r.p.name) : "", from: entry.start, to: Math.min(to, 4), out: entry.out, delay: entry.start === 0 ? 0.15 : tagDelay != null ? tagDelay : 0.35, perBase: entry.start === 0 ? 3.6 : 3.1 });
         }
       }
       sendScene(snap);

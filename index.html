@@ -3744,7 +3744,7 @@
           }
           if (play && play.fielder && play.fielder.pos === fielder.pos) {
             const t = Math.max(0, Math.min(1, elapsed / Math.max(0.1, play.fielder.t)));
-            const eased = 1 - (1 - t) * (1 - t);
+            const eased = 0.5 * t + 0.5 * t * t * (3 - 2 * t);
             spot = { x: fielder.x + (play.fielder.x - fielder.x) * eased, y: fielder.y + (play.fielder.y - fielder.y) * eased };
           }
           let busy = play && play.fielder && play.fielder.pos === fielder.pos;
@@ -3752,7 +3752,7 @@
             if (th.receiver !== fielder.pos) continue;
             busy = true;
             const t = Math.max(0, Math.min(1, elapsed / Math.max(0.3, th.arrive - 0.2)));
-            const eased = 1 - (1 - t) * (1 - t);
+            const eased = 0.5 * t + 0.5 * t * t * (3 - 2 * t);
             spot = { x: fielder.x + (th.to.x - fielder.x) * eased, y: fielder.y + (th.to.y - fielder.y) * eased };
           }
           if (!busy && play && play.landing && elapsed > 0.3) {
@@ -3765,6 +3765,10 @@
           drawGameActor(spot, "#2b6fa6", fielder.name || fielder.pos, width, height);
         }
         if (play) {
+          // Runners who don't move on this play stay on their bags.
+          for (const runner of scene.runners) {
+            if (!play.runners.some((moving) => moving.from === runner.base)) drawGameActor(GAME_BASES[runner.base], "#d27637", runner.name, width, height, true);
+          }
           for (const runner of play.runners) {
             const seconds = elapsed - runner.delay;
             if (seconds < 0 && runner.from > 0) {
