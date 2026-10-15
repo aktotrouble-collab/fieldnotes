@@ -3455,6 +3455,10 @@
         return spot;
       }
 
+      // The catcher's name is hidden while a batter or runner is within 10 ft of the plate.
+      let homeBusy = false;
+      const fielderLabel = (fielder) => (fielder.pos === "C" && homeBusy ? "" : fielder.name || fielder.pos);
+      const nearHome = (point) => Math.hypot(point.x, point.y) < 10;
       function drawGameActor(point, color, label, width, height, below) {
         const tc = gameState.colors;
         if (tc) color = color === "#2b6fa6" ? tc.field : color === "#1b4f7c" ? tc.field : color === "#d27637" || color === "#6b5a8c" ? tc.bat : color;
@@ -3528,7 +3532,8 @@
           context.setLineDash([]);
         }
         for (const fielder of frame.fielders) {
-          drawGameActor(fielder, fielder.has ? "#1b4f7c" : "#2b6fa6", fielder.name || fielder.pos, width, height);
+          homeBusy = frame.pre != null || frame.runners.some((runner) => !runner.scored && nearHome(runner));
+          drawGameActor(fielder, fielder.has ? "#1b4f7c" : "#2b6fa6", fielderLabel(fielder), width, height);
           if (fielder.has) {
             const s = worldToScreen({ x: fielder.x, y: fielder.y, z: 3 }, width, height);
             context.beginPath();
@@ -3720,7 +3725,8 @@
           const pitch = gameState.pitch;
           if ((performance.now() - pitch.start) / 1000 > pitch.duration + pitch.hold) gameState.pitch = null;
           else {
-            for (const fielder of scene.fielders) drawGameActor(fielder, "#2b6fa6", fielder.name || fielder.pos, width, height);
+            homeBusy = !!scene.batter;
+            for (const fielder of scene.fielders) drawGameActor(fielder, "#2b6fa6", fielderLabel(fielder), width, height);
             for (const runner of scene.runners) drawGameActor(GAME_BASES[runner.base], "#d27637", runner.name, width, height, true);
             if (scene.batter) drawGameActor({ x: -3.2, y: 0 }, "#6b5a8c", scene.batter.name, width, height, true);
             drawPitchFlight(width, height);
@@ -3729,6 +3735,11 @@
         }
         const lead = play ? play.lead || 0 : 0;
         const elapsed = play ? (performance.now() - play.start) / 1000 - lead : 0;
+        homeBusy = !play ? !!scene.batter : (elapsed < 0 || play.runners.some((runner) => {
+          if (runner.from !== 0) return false;
+          const seconds = elapsed - runner.delay;
+          return seconds < 0 || nearHome(basePathPoint(runner.from, runner.to, seconds, runner.perBase));
+        }));
         for (const fielder of scene.fielders) {
           let spot = fielder;
           const track = play && play.tracks && play.tracks[fielder.pos];
@@ -3739,7 +3750,7 @@
             const a = track[i];
             const b = track[Math.min(i + 1, track.length - 1)];
             const k = b[0] > a[0] ? Math.min(1, (t - a[0]) / (b[0] - a[0])) : 0;
-            drawGameActor({ x: a[1] + (b[1] - a[1]) * k, y: a[2] + (b[2] - a[2]) * k }, "#2b6fa6", fielder.name || fielder.pos, width, height);
+            drawGameActor({ x: a[1] + (b[1] - a[1]) * k, y: a[2] + (b[2] - a[2]) * k }, "#2b6fa6", fielderLabel(fielder), width, height);
             continue;
           }
           if (play && play.fielder && play.fielder.pos === fielder.pos) {
@@ -3762,7 +3773,7 @@
             const move = Math.min(d * 0.45, 20 * (elapsed - 0.3));
             spot = { x: fielder.x + dx / d * move, y: fielder.y + dy / d * move };
           }
-          drawGameActor(spot, "#2b6fa6", fielder.name || fielder.pos, width, height);
+          drawGameActor(spot, "#2b6fa6", fielderLabel(fielder), width, height);
         }
         if (play) {
           // Runners who don't move on this play stay on their bags.

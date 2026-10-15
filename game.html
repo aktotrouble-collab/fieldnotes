@@ -91,9 +91,12 @@
     #bug .b-who { display:flex; flex-direction:column; justify-content:center; gap:4px; padding:6px 10px; font-size:12px; font-weight:500; max-width:190px; }
     #bug .b-who span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     #bug .b-who b { color:#f2c14e; font-weight:600; margin-right:4px; }
-    #zone-overlay { position:absolute; right:12px; bottom:12px; width:300px; padding:8px; border-radius:10px; background:rgba(255,253,247,.88); border:1px solid var(--line); box-shadow:0 4px 18px rgba(0,0,0,.18); opacity:0; pointer-events:none; transition:opacity .7s ease; }
+    #zone-overlay { position:absolute; left:12px; bottom:64px; width:300px; padding:8px; border-radius:10px; background:rgba(255,253,247,.88); border:1px solid var(--line); box-shadow:0 4px 18px rgba(0,0,0,.18); opacity:0; pointer-events:none; transition:opacity .7s ease; }
     #zone-overlay.on { opacity:1; pointer-events:auto; transition:opacity .15s ease; }
     #zone-overlay canvas { max-width:none; }
+    #zone-mini { position:absolute; left:12px; bottom:64px; padding:4px; border-radius:8px; background:rgba(255,253,247,.9); border:1px solid var(--line); box-shadow:0 3px 12px rgba(0,0,0,.18); display:none; pointer-events:none; }
+    #zone-mini.on { display:block; }
+    #zone-mini canvas { display:block; width:170px; height:auto; max-width:none; }
     #pitch-result { position:absolute; left:0; right:0; top:34%; text-align:center; font:900 34px/1 system-ui,sans-serif; letter-spacing:.03em; color:#fff; text-shadow:0 2px 6px rgba(0,0,0,.7); pointer-events:none; z-index:2; }
     #pitch-result[data-kind="b"] { color:#7bd49a; }
     #pitch-result[data-kind="s"] { color:#ff8a6b; }
@@ -105,7 +108,8 @@
       #bug .b-who { max-width:120px; padding:4px 7px; font-size:10px; }
       #bug .b-mid { padding:4px 7px; }
       #field-frame { height:62vh !important; min-height:380px; }
-      #zone-overlay { width:210px; padding:5px; right:6px; bottom:44px; }
+      #zone-overlay { width:210px; padding:5px; left:6px; bottom:56px; }
+      #zone-mini { left:6px; bottom:56px; }
       #pitch-result { font-size:24px; }
       main { padding-left:8px; padding-right:8px; }
     }
@@ -246,6 +250,7 @@
               <div id="bug"></div>
               <div id="umpbar"><span id="ump-text"></span><div class="tbar"><i id="ump-bar"></i></div><button id="ump-btn">Challenge</button></div>
               <div id="chal-menu"></div>
+              <div id="zone-mini"><canvas id="zone-mini-canvas" width="340" height="400"></canvas></div>
               <div id="zone-overlay">
                 <div id="pitch-result"></div>                <canvas id="zone-canvas" width="340" height="400"></canvas>
                 <div id="aim-ui" class="hidden">
@@ -1344,6 +1349,7 @@
       clearTimeout(hrTimer);
       flight = null;
       holdView = false;
+      $("zone-mini").classList.remove("on");
       $("btn-skip").classList.add("hidden");
       liveRun = null;
       game = null;
@@ -1452,6 +1458,7 @@
       clearTimeout(revealTimer);
       clearTimeout(hrTimer);
       clearTimeout(resultTimer);
+      hideMini();
       flight = null;
       $("pitch-result").textContent = "";
       showOverlay(false);
@@ -1883,8 +1890,10 @@
       requestAnimationFrame(flightLoop);
     }
 
+    const hideMini = () => $("zone-mini").classList.remove("on");
     $("btn-pitch").addEventListener("click", () => {
       if (!game || game.over || phase !== "ready" || holdView) return;
+      hideMini();
       clearTimeout(autoTimer);
       autoPaused = false;
       clearTimeout(resultTimer);
@@ -1957,7 +1966,7 @@
     // Manual batting against a simulated pitcher keeps the pitches coming until the ball is put in play.
     let autoTimer = null;
     let autoPaused = false;
-    const autoOK = (event) => !!(event && !event.pa && !event.live && !event.ball && !autoPaused && game && !game.over && human() && pitchMode() === "sim");
+    const autoOK = (event) => !!(event && !event.pa && !event.live && !event.ball && !event.foul && !autoPaused && game && !game.over && human() && pitchMode() === "sim");
     function scheduleAuto(ms) {
       clearTimeout(autoTimer);
       autoTimer = setTimeout(() => {
@@ -2128,6 +2137,14 @@
         if (t.contact) {
           t.contactAt = performance.now();
           showOverlay(false);
+          drawZone();
+          const mini = $("zone-mini-canvas");
+          const mctx = mini.getContext("2d");
+          mctx.clearRect(0, 0, mini.width, mini.height);
+          mctx.fillStyle = "#f3f0e6";
+          mctx.fillRect(0, 0, mini.width, mini.height);
+          mctx.drawImage($("zone-canvas"), 0, 0);
+          $("zone-mini").classList.add("on");
         }
       });
     }
@@ -2166,6 +2183,7 @@
       if (chal && chal.abs) return 0;
       const fade = (p) => Math.max(0, 1 - p / 0.25);
       const now = performance.now();
+      if (timing && timing.contact) return 0.5;
       if (timing) return now < timing.start ? 1 : fade((now - timing.start) / timing.duration);
       if (flight) return fade((now - flight.start) / flight.duration);
       return 1;
