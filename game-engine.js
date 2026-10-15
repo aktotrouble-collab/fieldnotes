@@ -1024,11 +1024,20 @@
     return { swing: true, ...swingMechanics(g.rng, batter, pitcher, pitch) };
   }
 
-  const swingQuality = (swing) => 1 - Math.hypot(swing.timing / TIMING_WINDOW, swing.loc / LOC_WINDOW);
+  const swingQuality = (swing, batter, pitcher, pitch) => {
+    const prime = swing.offset && pitch ? primeContactTiming(batter, pitcher, pitch) : 0;
+    return 1 - Math.hypot((swing.timing - prime) / TIMING_WINDOW, swing.loc / LOC_WINDOW);
+  };
 
   function batSide(batter, pitcher) {
     if (batter.bats === 'S') return pitcher.throws === 'L' ? 'R' : 'L';
     return batter.bats;
+  }
+
+  function primeContactTiming(batter, pitcher, pitch) {
+    const side = batSide(batter, pitcher) === 'L' ? -1 : 1;
+    // Approximate the contact-depth shift as 2.4 feet per lateral foot of pitch location.
+    return side * pitch.x * 2.4 / (pitch.mph * 1.46667) * 1000;
   }
 
   function battedBallFrom(g, batter, pitcher, pitch, swing, quality) {
@@ -1036,6 +1045,18 @@
     const pullSign = batSide(batter, pitcher) === 'L' ? 1 : -1;
     const batSpeed = 69 + 0.2 * (batter.power - 50);
     const evMax = 0.2 * pitch.mph + 1.2 * batSpeed;
+    if (swing.offset) {
+      const { x, z } = swing.offset;
+      const centered = clamp(1 - Math.hypot(x, z) / (LOC_WINDOW / 0.6), 0, 1);
+      const timingError = swing.timing - primeContactTiming(batter, pitcher, pitch);
+      const timed = Math.exp(-Math.pow(timingError / TIMING_WINDOW, 2));
+      return {
+        ev: evMax * (0.6 + 0.4 * Math.pow(centered, 0.75)) * timed + rng.between(-2, 2),
+        la: 12 - z * 18 + rng.between(-1, 1),
+        dir: pullSign * 4 - pullSign * swing.timing * 1.8 - x * 8 + rng.between(-2, 2),
+        pullSign
+      };
+    }
     const q = clamp(quality, 0, 1);
     const ev = evMax * (0.6 + 0.4 * Math.pow(q, 0.75));
     const la = (batter.loft ?? 12) + 12 * swing.loc + rng.gauss() * (8 + 10 * (1 - q));
@@ -2135,6 +2156,7 @@
     return outcome;
   }
 
+  // Click swings add offset {x,z} in inches; timing stays relative to plate crossing.
   // One pitch. `manual` may be { swing, timing, loc } or { swing: true, ball: {ev, la, dir} };
   // `preset` is a pitch previously made by nextPitch.
   function nextPitch(g, aim) {
@@ -2201,7 +2223,7 @@
     } else if (manual && manual.ball) {
       ballInPlay = { ev: manual.ball.ev, la: manual.ball.la, dir: ((manual.ball.dir + 180) % 360 + 360) % 360 - 180, q: 0.85 };
     } else {
-      const quality = swingQuality(swing);
+      const quality = swingQuality(swing, batter, pitcher, pitch);
       if (quality <= 0) {
         event.call = 'swinging strike';
         g.count.strikes += 1;
@@ -3612,7 +3634,7 @@
   }
 
   const GameEngine = {
-    PARK_LIST, POSITIONS, STYLES, PITCH_TYPES, DEFAULT_MIX, pitchSpread, ZONE, PITCH_RADIUS, TIMING_WINDOW, LOC_WINDOW, playerHeight, playerWeight,
+    PARK_LIST, POSITIONS, STYLES, PITCH_TYPES, DEFAULT_MIX, pitchSpread, ZONE, PITCH_RADIUS, TIMING_WINDOW, LOC_WINDOW, primeContactTiming, playerHeight, playerWeight,
     settings, parkById, fenceAt, boundaryAt, wallAt, flightSim, parkEnv, makeEnv, windNow, windText, windVector, airDensity, tempFactor, PARK_TEMP, defaultSpot, shiftedSpot, setShift, SHIFT_PRESETS,
     createGame, validateTeam, stepPitch, nextPitch, playHeldContact, completeContact, completeLive, reviewLive, resumeSteal, challengeCall, pendingReview,
     simPlateAppearance, simHalfInning, simGame, stealOdds, canSteal,

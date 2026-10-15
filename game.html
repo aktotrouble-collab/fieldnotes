@@ -178,7 +178,7 @@
         </div>
         <div class="ctl-grid">
           <span></span><b class="ctl-head">Away</b><b class="ctl-head">Home</b>
-          <span class="ctl-title">Batting <i class="tip" tabindex="0" data-tip="Simulated: the engine swings for the team. I enter EV / LA: you type exit velocity, launch angle and direction for each swing. I swing (timing): move the green ring over where you think the ball will cross the plate and click or press Space as it arrives. The ball breaks late, so don't commit too early, and don't swing to take a pitch. The farther the ball is from the ring's center, the weaker the contact.">i</i></span>
+          <span class="ctl-title">Batting <i class="tip" tabindex="0" data-tip="Simulated: the engine swings for the team. I enter EV / LA: you type exit velocity, launch angle and direction for each swing. I swing (timing): click the visible ball or aim the green ring and press Space as it arrives. Centering and timing both control exit velocity. Inside pitches need earlier contact; outside pitches need deeper/later contact. Below the ball lifts it, above drives it down. Early timing pulls, late timing goes opposite field; horizontal offset also steers direction. Don't swing to take a pitch.">i</i></span>
           <select id="ctl-0"><option value="sim">Simulated</option><option value="evla">I enter EV / LA</option><option value="timing">I swing (timing)</option></select>
           <select id="ctl-1"><option value="sim">Simulated</option><option value="evla">I enter EV / LA</option><option value="timing">I swing (timing)</option></select>
           <span class="ctl-title">Pitching <i class="tip" tabindex="0" data-tip="Player Control: you pick the pitch type and spot (control and fatigue add misses). Advanced: same, plus a timing meter that tightens or widens your miss.">i</i></span>
@@ -294,7 +294,8 @@
               <button id="btn-simswing">Let sim swing</button>
             </div>
             <div class="hidden" id="timing-help" style="margin-top:6px">
-              <label class="muted">Pitch speed <i class="tip" tabindex="0" data-tip="How fast the pitch arrives when you swing with timing. Rookie is slow motion; Real speed is the true pitch speed. Move the green ring over where you think the ball will cross the plate and click (or press Space) as it arrives. The ball breaks late, so don't commit too early. Don't swing to take the pitch. The farther the ball is from the ring's center, the weaker the contact.">i</i> <select id="difficulty"><option value="rookie">Rookie (slow-mo)</option><option value="pro" selected>Pro</option><option value="allstar">All-Star</option><option value="real">Real speed</option></select></label>
+              <div class="muted">Center the click on the visible ball for harder contact. Timing also controls exit velocity: meet inside pitches earlier, outside pitches deeper/later. Click below the ball to lift it, above it for grounders. Early timing pulls; late timing goes opposite field. Horizontal offset also steers direction.</div>
+              <label class="muted">Pitch speed <i class="tip" tabindex="0" data-tip="How fast the pitch arrives when you swing with timing. Rookie is slow motion; Real speed is the true pitch speed. Click the visible ball or aim the green ring and press Space as it arrives. Centering and timing control exit velocity: inside pitches peak earlier, outside pitches deeper/later. Feedback is relative to that ideal contact time. Vertical offset controls launch angle; timing plus horizontal offset controls direction. Don't swing to take the pitch.">i</i> <select id="difficulty"><option value="rookie">Rookie (slow-mo)</option><option value="pro" selected>Pro</option><option value="allstar">All-Star</option><option value="real">Real speed</option></select></label>
             </div>
             <div class="row" style="margin-top:10px">
               <label class="muted">Baserunning / throw decisions <i class="tip" tabindex="0" data-tip="Batting: click GO / STOP / TURN BACK by the base your runner is approaching (keys G / S / B). Fielding: pick the throw target as the fielder gets to the ball. Real-time keeps the play moving; Pause stops it for each decision. Unanswered decisions use the AI's choice.">i</i> <select id="decision"><option value="real" selected>Real-time</option><option value="pause">Pause for each decision</option></select></label>
@@ -2475,27 +2476,43 @@
 
     const timingProgress = (t, now) => Math.min(1.4, Math.max(0, (now - t.start) / t.duration));
 
+    function timingBallPosition(pitch, progress) {
+      const p = Math.min(1, progress);
+      const world = pitchPos(pitch, p), f = perspective(p);
+      const point = { x: world.x * f, z: EYE_Z + (world.z - EYE_Z) * f };
+      if (progress > 1) {
+        const previous = pitchPos(pitch, 0.94), previousScale = perspective(0.94);
+        const k = (progress - 1) / 0.06;
+        point.x += (point.x - previous.x * previousScale) * k;
+        point.z += (point.z - (EYE_Z + (previous.z - EYE_Z) * previousScale)) * k;
+      }
+      return point;
+    }
+
     function swingAt(time, point) {
       if (phase !== "await" || mode() !== "timing" || !timing || timing.swung) return;
       const cross = timing.start + timing.duration;
       const pitch = timing.pitch;
-      const dx = (point.x - pitch.x) * 12;
-      const dz = (point.z - pitch.z) * 12;
+      const progress = timingProgress(timing, time);
+      const ballPoint = timingBallPosition(pitch, progress);
+      const dx = (point.x - ballPoint.x) * 12;
+      const dz = (point.z - ballPoint.z) * 12;
       const miss = Math.hypot(dx, dz) * 0.6;
       const ms = (time - cross) / timing.slow;
       const swing = time < timing.start
         ? { swing: true, timing: 400, loc: 10 }
-        : { swing: true, timing: ms, loc: dz <= 0 ? miss : -miss };
-      const early = ms < 0;
+        : { swing: true, timing: ms, loc: miss, offset: { x: dx, z: dz } };
+      const timingError = ms - E.primeContactTiming(E.currentBatter(game), E.currentPitcher(game), pitch);
+      const early = timingError < 0;
       const vertical = Math.abs(dz) < 0.5 ? "" : dz < 0 ? `${Math.abs(dz).toFixed(1)} in low` : `${dz.toFixed(1)} in high`;
       const horizontal = Math.abs(dx) < 0.5 ? "" : dx < 0 ? `${Math.abs(dx).toFixed(1)} in toward 3B side` : `${dx.toFixed(1)} in toward 1B side`;
-      const grade = Math.abs(ms) < 8 && Math.hypot(dx, dz) < 1.5 ? "Perfect" : Math.abs(ms) < TIMING_REF ? "Good" : "Mistimed";
-      const parts = [Math.abs(ms) < 3 ? "on time" : `${Math.round(Math.abs(ms))} ms ${early ? "early" : "late"}`, vertical, horizontal].filter(Boolean);
+      const grade = Math.abs(timingError) < 8 && Math.hypot(dx, dz) < 1.5 ? "Perfect" : Math.abs(timingError) < TIMING_REF ? "Good" : "Mistimed";
+      const parts = [Math.abs(timingError) < 3 ? "on time" : `${Math.round(Math.abs(timingError))} ms ${early ? "early" : "late"} of ideal contact`, vertical, horizontal].filter(Boolean);
       timing.swung = { swing, time, point, text: `${grade} — ${parts.join(" · ")}`, grade };
-      feedback = { point, ball: { x: pitch.x, z: pitch.z }, text: timing.swung.text, grade };
+      feedback = { point, ball: ballPoint, text: timing.swung.text, grade };
       const t = timing;
       t.swungAt = performance.now();
-      t.swungP = timingProgress(t, t.swungAt);
+      t.swungP = progress;
       // The result is decided now; on contact the ball freezes where it was hit, otherwise it flies on through.
       resolveManual(swing, undefined, (event, rec) => {
         t.outcome = { event, rec };
@@ -2593,19 +2610,12 @@
         };
         const ballAt = (p, cap) => {
           const p1 = Math.min(1, p);
-          const world = pitchPos(timing.pitch, p1);
           const f = perspective(p1);
-          const c = zoneToCanvas(world.x * f, EYE_Z + (world.z - EYE_Z) * f);
-          let { x, y } = c;
+          const point = timingBallPosition(timing.pitch, p);
+          const { x, y } = zoneToCanvas(point.x, point.z);
           let r = Math.max(2.2, E.PITCH_RADIUS * ZONE_VIEW.scale * f);
           if (p > 1) {
             // Past the plate the ball keeps going on its line, growing as it nears the camera.
-            const wb = pitchPos(timing.pitch, 0.94);
-            const fb = perspective(0.94);
-            const cb = zoneToCanvas(wb.x * fb, EYE_Z + (wb.z - EYE_Z) * fb);
-            const k = (p - 1) / 0.06;
-            x += (c.x - cb.x) * k;
-            y += (c.y - cb.y) * k;
             r *= 1 + (p - 1) * 2.2;
           }
           return { x, y, r, f };
