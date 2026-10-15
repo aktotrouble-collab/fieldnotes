@@ -1143,6 +1143,15 @@
       let freeCamera = { ...camera };
       let cameraUpdatedAt = 0;
       let cameraRunner = null;
+      let chaseCamera = null;
+      const chaseLook = { yaw: 0, pitch: 0, held: false, updatedAt: 0, raf: 0 };
+      const chaseDistances = { runner: 12, ball: 18 };
+      try {
+        const saved = JSON.parse(localStorage.getItem("field-notes-chase-distances") || "{}");
+        for (const mode of ["runner", "ball"]) {
+          if (Number.isFinite(saved[mode])) chaseDistances[mode] = Math.max(3, Math.min(180, saved[mode]));
+        }
+      } catch (error) { console.warn("Unable to restore follow-camera distances", error); }
       const topView = { zoom: 1, x: 0, y: 0 };
       const TOP_MAX_ZOOM = 6;
       const zoomLayer = document.getElementById("zoom-layer");
@@ -3161,6 +3170,7 @@
       }
 
       function drawTouchPopup(touch, width, height) {
+        if (chaseCamera && chaseCoordinates(touch).d < 0.5) return;
         const spot = worldToScreen({ x: touch.x, y: touch.y, z: 0 }, width, height);
         context.font = "600 9px system-ui, sans-serif";
         context.textAlign = "center";
@@ -3173,8 +3183,9 @@
         context.fillText(touch.text, spot.x, spot.y + 8);
       }
 
-      // True when an opaque wall (outfield fence or foul-territory wall) sits between the camera and the point (orthographic line of sight).
+      // True when an opaque wall sits between the camera and the point.
       function fenceHides(point) {
+        if (chaseCamera && chaseCoordinates(point).d < 0.5) return true;
         const park = selectedPark();
         const fence = fenceFor(park.id);
         const foul = foulPolyline(park.id);
@@ -3185,8 +3196,8 @@
         const z0 = point.z || 0;
         const sinE = Math.sin(camera.elevation);
         const cosE = Math.cos(camera.elevation);
-        const dx = -sinE * Math.sin(camera.yaw);
-        const dy = -sinE * Math.cos(camera.yaw);
+        const dx = chaseCamera ? chaseCamera.eye.x - point.x : -sinE * Math.sin(camera.yaw);
+        const dy = chaseCamera ? chaseCamera.eye.y - point.y : -sinE * Math.cos(camera.yaw);
         if (Math.abs(dx) + Math.abs(dy) < 1e-6) return false;
         for (let i = 0; i < pts.length - 1; i += 1) {
           const a = pts[i];
@@ -3196,8 +3207,8 @@
           if (Math.abs(den) < 1e-9) continue;
           const t = ((a.x - point.x) * ey - (a.y - point.y) * ex) / den;
           const u = ((a.x - point.x) * dy - (a.y - point.y) * dx) / den;
-          if (t <= 0 || u < 0 || u > 1) continue;
-          const zAt = z0 + cosE * t;
+          if (t <= 0 || (chaseCamera && t >= 1) || u < 0 || u > 1) continue;
+          const zAt = z0 + (chaseCamera ? chaseCamera.eye.z - z0 : cosE) * t;
           const top = heights ? heights[i] ?? 8 : FOUL_WALL_HEIGHT;
           if (zAt < top - 0.05) return true;
         }
@@ -3205,6 +3216,7 @@
       }
 
       function worldToScreen(point, width, height) {
+        if (chaseCamera) return projectChasePoint(chaseCoordinates(point), width, height);
         const cosine = Math.cos(camera.yaw);
         const sine = Math.sin(camera.yaw);
         const relativeX = point.x - camera.targetX;
@@ -3220,9 +3232,13 @@
 
       function drawWorldPolygon(points, fill, stroke, width, height, close = true) {
         if (points.length < 2) return;
+        if (chaseCamera) {
+          points = clipChasePolygon(points.map(chaseCoordinates));
+          if (points.length < 2) return;
+        }
         context.beginPath();
         points.forEach((point, index) => {
-          const screen = worldToScreen(point, width, height);
+          const screen = chaseCamera ? projectChasePoint(point, width, height) : worldToScreen(point, width, height);
           if (index === 0) context.moveTo(screen.x, screen.y);
           else context.lineTo(screen.x, screen.y);
         });
@@ -3242,6 +3258,19 @@
         if (points.length < 2) return;
         context.beginPath();
         points.forEach((point, index) => {
+          if (chaseCamera) {
+            if (!index) return;
+            const a = chaseCoordinates(points[index - 1]);
+            const b = chaseCoordinates(point);
+            if (a.d < 0.5 && b.d < 0.5) return;
+            const clipped = clipChasePolygon([a, b]);
+            if (clipped.length < 2) return;
+            const from = projectChasePoint(clipped[0], width, height);
+            const to = projectChasePoint(clipped[1], width, height);
+            context.moveTo(from.x, from.y);
+            context.lineTo(to.x, to.y);
+            return;
+          }
           const screen = worldToScreen(point, width, height);
           if (index === 0) context.moveTo(screen.x, screen.y);
           else context.lineTo(screen.x, screen.y);
@@ -3251,6 +3280,38 @@
         context.setLineDash(dash);
         context.stroke();
         context.setLineDash([]);
+      }
+
+      function chaseCoordinates(point) {
+        const { eye } = chaseCamera;
+        const yaw = chaseCamera.yaw + chaseLook.yaw;
+        const pitch = Math.max(-1.45, Math.min(1.45, chaseCamera.pitch + chaseLook.pitch));
+        const x = point.x - eye.x, y = point.y - eye.y, z = (point.z || 0) - eye.z;
+        const forward = x * Math.sin(yaw) + y * Math.cos(yaw);
+        return {
+          x: x * Math.cos(yaw) - y * Math.sin(yaw),
+          y: z * Math.cos(pitch) - forward * Math.sin(pitch),
+          d: forward * Math.cos(pitch) + z * Math.sin(pitch)
+        };
+      }
+
+      function projectChasePoint(point, width, height) {
+        const focal = Math.min(width, height) * 0.8;
+        const depth = Math.max(0.5, point.d);
+        return { x: width / 2 + point.x * focal / depth, y: height * 0.44 - point.y * focal / depth, depth: point.d };
+      }
+
+      function clipChasePolygon(points) {
+        const output = [];
+        for (let i = 0; i < points.length; i += 1) {
+          const a = points[i], b = points[(i + 1) % points.length];
+          if (a.d >= 0.5) output.push(a);
+          if ((a.d >= 0.5) !== (b.d >= 0.5)) {
+            const u = (0.5 - a.d) / (b.d - a.d);
+            output.push({ x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u, d: 0.5 });
+          }
+        }
+        return output;
       }
 
       function groundShapeToWorld(park, extraFeet = 0) {
@@ -3426,6 +3487,17 @@
         }
         drawFlights(width, height);
         if (IS_GAME) drawGameActors(width, height);
+        if (chaseCamera) {
+          context.font = "600 11px system-ui, sans-serif";
+          context.textAlign = "right";
+          context.textBaseline = "top";
+          context.lineWidth = 3;
+          context.strokeStyle = "#fffefa";
+          const text = `${gameCameraMode === "runner" ? "Hitter" : "Ball"} follow: ${chaseDistances[gameCameraMode].toFixed(1)} ft · Scroll or +/- to zoom`;
+          context.strokeText(text, width - 12, 12);
+          context.fillStyle = "#1c2a21";
+          context.fillText(text, width - 12, 12);
+        }
       }
 
       /*
@@ -3450,12 +3522,50 @@
         gameCameraMode = mode;
         cameraUpdatedAt = 0;
         cameraRunner = null;
+        chaseCamera = null;
+        chaseLook.yaw = 0;
+        chaseLook.pitch = 0;
+        chaseLook.held = false;
+        chaseLook.updatedAt = 0;
+        cancelAnimationFrame(chaseLook.raf);
+        chaseLook.raf = 0;
         if (mode === "free" && !manual) camera = { ...freeCamera };
         if (manual) window.parent.postMessage({ type: "gm-camera-mode", mode: "free" }, "*");
       }
 
       function takeCameraControl() {
         if (IS_GAME && gameCameraMode !== "free") setGameCamera("free", true);
+      }
+
+      function beginChaseLook() {
+        if (!IS_GAME || !["runner", "ball"].includes(gameCameraMode)) return false;
+        chaseLook.held = true;
+        chaseLook.updatedAt = performance.now();
+        cancelAnimationFrame(chaseLook.raf);
+        chaseLook.raf = 0;
+        return true;
+      }
+
+      function endChaseLook() {
+        if (!chaseLook.held) return;
+        chaseLook.held = false;
+        chaseLook.updatedAt = performance.now();
+        const returning = () => {
+          chaseLook.raf = 0;
+          if (chaseLook.held || !["runner", "ball"].includes(gameCameraMode)) return;
+          render3D();
+          if (Math.abs(chaseLook.yaw) + Math.abs(chaseLook.pitch) > 0) chaseLook.raf = requestAnimationFrame(returning);
+        };
+        chaseLook.raf = requestAnimationFrame(returning);
+      }
+
+      function zoomFollowCamera(factor) {
+        if (!IS_GAME || !["runner", "ball"].includes(gameCameraMode)) return false;
+        chaseDistances[gameCameraMode] = Math.max(3, Math.min(180, chaseDistances[gameCameraMode] / factor));
+        try {
+          localStorage.setItem("field-notes-chase-distances", JSON.stringify(chaseDistances));
+        } catch (error) { console.warn("Unable to save follow-camera distance", error); }
+        return true;
       }
 
       function gamePlayBallPoint(play, elapsed) {
@@ -3465,7 +3575,10 @@
         if (elapsed <= last.t) {
           let i = 0;
           while (i < flying.length - 1 && flying[i].t < elapsed) i += 1;
-          return flying[i];
+          if (!i) return flying[i];
+          const a = flying[i - 1], b = flying[i];
+          const u = Math.max(0, Math.min(1, (elapsed - a.t) / Math.max(0.0001, b.t - a.t)));
+          return { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u, z: a.z + (b.z - a.z) * u };
         }
         let at = { x: last.x, y: last.y, z: Math.max(last.z, 3) };
         for (const th of play.throws) {
@@ -3486,34 +3599,104 @@
 
       function cameraAction() {
         const live = gameState.live && gameState.live.frame;
-        if (live && live.pre == null) {
+        if (live) {
+          if (live.pre != null) return { ball: { x: 0, y: 60.5 * (1 - live.pre), z: 6 - 3 * live.pre - 1.2 * live.pre * live.pre }, time: live.t };
+          const hitter = live.runners.find((r) => r.isBatter) || live.runners.find((r) => r.id === "batter");
+          if (gameCameraMode === "runner") return { ball: live.ball, runner: hitter, time: live.t };
           const eligible = live.runners.filter((r) => !r.out && !r.scored);
           const moving = eligible.filter((r) => r.state === "run" || r.state === "back");
           const runners = moving.length ? moving : eligible;
           const runner = runners.find((r) => r.id === cameraRunner)
             || runners.slice().sort((a, b) => b.base - a.base)[0];
           if (runner) cameraRunner = runner.id;
-          return { ball: live.ball, runner };
+          return { ball: live.ball, runner, time: live.t };
+        }
+        const pitch = gameState.pitch;
+        if (pitch) {
+          const seconds = (performance.now() - pitch.start) / 1000;
+          const u = Math.max(0, Math.min(1, seconds / pitch.duration));
+          const f = u * (pitch.path.length - 1), i = Math.min(pitch.path.length - 2, Math.floor(f));
+          const a = pitch.path[i], b = pitch.path[i + 1], k = f - i;
+          return { ball: { x: a.x + (b.x - a.x) * k, y: 60.5 * (1 - u), z: a.z + (b.z - a.z) * k }, time: seconds };
         }
         const play = gameState.play;
-        if (!play) return { ball: { x: 0, y: 60.5, z: 3 } };
+        if (!play) return { ball: { x: 0, y: 60.5, z: 6 }, time: 0 };
         const elapsed = (performance.now() - play.start) / 1000 - play.lead;
+        if (gameCameraMode === "runner") {
+          const hitter = play.runners.find((r) => r.from === 0);
+          return { ball: gamePlayBallPoint(play, elapsed), runner: hitter ? basePathPoint(hitter.from, hitter.to, elapsed - hitter.delay, hitter.perBase) : null, time: elapsed };
+        }
         const eligible = play.runners.filter((r) => elapsed >= r.delay && elapsed < r.delay + (r.to - r.from) * r.perBase);
         const runner = eligible.find((r) => r === cameraRunner) || eligible.slice().sort((a, b) => b.from - a.from)[0];
         if (runner) cameraRunner = runner;
         return {
           ball: gamePlayBallPoint(play, elapsed),
-          runner: runner ? basePathPoint(runner.from, runner.to, elapsed - runner.delay, runner.perBase) : null
+          runner: runner ? basePathPoint(runner.from, runner.to, elapsed - runner.delay, runner.perBase) : null,
+          time: elapsed
         };
       }
 
       function updateGameCamera(width, height) {
         if (gameCameraMode === "free") return;
         const now = performance.now();
+        if (!chaseLook.held && chaseLook.updatedAt) {
+          const decay = Math.exp(-Math.max(0, (now - chaseLook.updatedAt) / 1000) * 1.8);
+          chaseLook.yaw *= decay;
+          chaseLook.pitch *= decay;
+          if (Math.abs(chaseLook.yaw) + Math.abs(chaseLook.pitch) < 0.001) chaseLook.yaw = chaseLook.pitch = 0;
+        }
+        chaseLook.updatedAt = now;
         const blend = cameraUpdatedAt ? 1 - Math.exp(-Math.min(0.1, (now - cameraUpdatedAt) / 1000) * 5) : 1;
         cameraUpdatedAt = now;
         const action = cameraAction();
         const ball = action.ball;
+        if (gameCameraMode === "runner" || gameCameraMode === "ball") {
+          const runnerMode = gameCameraMode === "runner";
+          const point = runnerMode ? { ...(action.runner || { x: -3.2, y: 0 }), z: 3 } : ball;
+          const source = gameState.live || gameState.play || gameState.pitch || gameState.scene;
+          if (!chaseCamera || chaseCamera.source !== source || action.time < chaseCamera.time) {
+            let yaw = runnerMode ? 0 : Math.PI;
+            let pitch = 0;
+            if (gameState.play && !runnerMode) {
+              const a = gamePlayBallPoint(gameState.play, action.time);
+              const b = gamePlayBallPoint(gameState.play, action.time + 0.04);
+              if (Math.hypot(b.x - a.x, b.y - a.y) > 0.001) {
+                yaw = Math.atan2(b.x - a.x, b.y - a.y);
+                pitch = Math.atan2(b.z - a.z, Math.hypot(b.x - a.x, b.y - a.y));
+              }
+            }
+            chaseCamera = { source, time: action.time, last: { x: point.x, y: point.y, z: point.z }, yaw, pitch, travelPitch: pitch, eye: { x: 0, y: 0, z: 0 } };
+          }
+          const dx = point.x - chaseCamera.last.x, dy = point.y - chaseCamera.last.y;
+          const dz = point.z - chaseCamera.last.z;
+          if (runnerMode) {
+            const ballX = ball.x - point.x, ballY = ball.y - point.y;
+            if (Math.hypot(ballX, ballY) > 0.001) chaseCamera.yaw = Math.atan2(ballX, ballY);
+            chaseCamera.travelPitch = 0;
+          } else if (action.time > chaseCamera.time && Math.hypot(dx, dy, dz) > 0.001) {
+            if (Math.hypot(dx, dy) > 0.001) chaseCamera.yaw = Math.atan2(dx, dy);
+            chaseCamera.travelPitch = runnerMode ? 0 : Math.max(-1.35, Math.min(1.35, Math.atan2(dz, Math.hypot(dx, dy))));
+          }
+          chaseCamera.last = { x: point.x, y: point.y, z: point.z };
+          chaseCamera.time = action.time;
+          const distance = chaseDistances[gameCameraMode];
+          const yaw = chaseCamera.yaw;
+          const pitch = chaseCamera.travelPitch;
+          chaseCamera.eye = {
+            x: point.x - Math.sin(yaw) * Math.cos(pitch) * distance,
+            y: point.y - Math.cos(yaw) * Math.cos(pitch) * distance,
+            z: Math.max(0.8, point.z - Math.sin(pitch) * distance + 0.7)
+          };
+          const lookAt = runnerMode ? ball : point;
+          chaseCamera.pitch = Math.atan2(lookAt.z - chaseCamera.eye.z, Math.max(0.5, Math.hypot(lookAt.x - chaseCamera.eye.x, lookAt.y - chaseCamera.eye.y)));
+          // Keep a useful orthographic view ready when manual movement releases tracking.
+          camera.yaw = yaw;
+          camera.elevation = Math.max(0.22, Math.min(MAX_ELEVATION, Math.PI / 2 + pitch));
+          camera.scale = Math.max(0.65, Math.min(4.5, 80 / distance));
+          camera.targetX = point.x;
+          camera.targetY = point.y;
+          return;
+        }
         let yaw = 0;
         let elevation = 0.68;
         let focus = { x: 0, y: 175, z: 0 };
@@ -3523,19 +3706,6 @@
           yaw = -Math.atan2(ball.x, Math.max(100, ball.y)) * 0.4;
           focus = { x: ball.x * 0.16, y: 170 + (ball.y - 170) * 0.12, z: 0 };
           anchors.push(ball, { ...ball, z: 0 });
-        } else if (gameCameraMode === "ball" || gameCameraMode === "runner") {
-          const runnerMode = gameCameraMode === "runner";
-          const point = runnerMode ? action.runner || { x: 0, y: 35, z: 0 } : ball;
-          focus = { x: point.x, y: point.y, z: (point.z || 0) * 0.5 };
-          elevation = runnerMode ? 0.7 : 0.6;
-          yaw = -Math.atan2(point.x, Math.max(80, point.y)) * 0.3;
-          const span = runnerMode ? 105 : 150;
-          anchors = [
-            { x: point.x - span, y: point.y - span, z: 0 },
-            { x: point.x + span, y: point.y + span, z: 0 },
-            point, { ...point, z: 0 }
-          ];
-          maxScale = runnerMode ? 2.5 : 2;
         } else if (gameCameraMode === "high") {
           elevation = 0.22;
         } else {
@@ -3597,7 +3767,8 @@
         const tc = gameState.colors;
         if (tc) color = color === "#2b6fa6" ? tc.field : color === "#1b4f7c" ? tc.field : color === "#d27637" || color === "#6b5a8c" ? tc.bat : color;
         const screen = worldToScreen({ x: point.x, y: point.y, z: 3 }, width, height);
-        const radius = Math.max(3, 4.2 * Math.sqrt(camera.scale));
+        if (chaseCamera && (screen.depth < 0.5 || screen.x < -60 || screen.x > width + 60 || screen.y < -60 || screen.y > height + 60)) return;
+        const radius = chaseCamera ? Math.max(3, Math.min(45, Math.min(width, height) * 0.14 / screen.depth)) : Math.max(3, 4.2 * Math.sqrt(camera.scale));
         context.beginPath();
         context.arc(screen.x, screen.y, radius, 0, Math.PI * 2);
         context.fillStyle = color;
@@ -3653,23 +3824,14 @@
         for (const th of frame.throws) {
           if (frame.t < th.t0) continue;
           const u = Math.min(1, (frame.t - th.t0) / Math.max(0.05, th.t1 - th.t0));
-          context.beginPath();
-          for (let step = 0; step <= 16; step += 1) {
-            const screen = worldToScreen(liveThrowPoint(th, u * step / 16), width, height);
-            if (step === 0) context.moveTo(screen.x, screen.y);
-            else context.lineTo(screen.x, screen.y);
-          }
-          context.setLineDash([4, 3]);
-          context.strokeStyle = th.wild ? "#b3392f" : "#2b6fa6";
-          context.lineWidth = 1.6;
-          context.stroke();
-          context.setLineDash([]);
+          drawWorldLine(Array.from({ length: 17 }, (_, step) => liveThrowPoint(th, u * step / 16)), th.wild ? "#b3392f" : "#2b6fa6", 1.6, width, height, [4, 3]);
         }
         for (const fielder of frame.fielders) {
           homeBusy = frame.pre != null || frame.runners.some((runner) => !runner.scored && nearHome(runner));
           drawGameActor(fielder, fielder.has ? "#1b4f7c" : "#2b6fa6", fielderLabel(fielder), width, height);
           if (fielder.has) {
             const s = worldToScreen({ x: fielder.x, y: fielder.y, z: 3 }, width, height);
+            if (chaseCamera && s.depth < 0.5) continue;
             context.beginPath();
             context.arc(s.x, s.y, Math.max(6, 7.5 * Math.sqrt(camera.scale)), 0, Math.PI * 2);
             context.strokeStyle = "#fffefa";
@@ -3709,7 +3871,7 @@
         context.ellipse(shadow.x, shadow.y, 1.5, 0.75, 0, 0, Math.PI * 2);
         context.fill();
         context.beginPath();
-        context.arc(ballScreen.x, ballScreen.y, 2, 0, Math.PI * 2);
+        context.arc(ballScreen.x, ballScreen.y, chaseCamera ? Math.max(2, Math.min(16, Math.min(width, height) * 0.08 / ballScreen.depth)) : 2, 0, Math.PI * 2);
         context.fillStyle = "#fffefa";
         context.fill();
         context.lineWidth = 0.8;
@@ -3721,6 +3883,7 @@
 
         // interactive chips
         if (frame.batHuman) {
+          let controlRow = 0;
           for (const runner of frame.runners) {
             if (runner.out || runner.scored) continue;
             const d = runner.decide;
@@ -3729,6 +3892,11 @@
             else if (runner.state === "hold" && runner.canGo) anchor = GAME_BASES[runner.base % 4];
             if (!anchor) continue;
             const s = worldToScreen({ x: anchor.x, y: anchor.y, z: 0 }, width, height);
+            if (chaseCamera) {
+              s.x = Math.max(80, Math.min(width - 80, s.x));
+              s.y = s.depth < 0.5 ? height - 100 - controlRow * 65 : Math.max(40, Math.min(height - 110 - controlRow * 65, s.y));
+              controlRow += 1;
+            }
             const items = [];
             if (d && !d.blocked) {
               const choice = d.cont === undefined ? (d.ai ? "go" : "stop") : d.cont ? "go" : "stop";
@@ -3776,6 +3944,7 @@
       function drawPitchBall(u, width, height) {
         const p = { x: 0, y: 60.5 * (1 - u), z: 6 - 3 * u - 1.2 * u * u };
         const s = worldToScreen(p, width, height);
+        if (chaseCamera && s.depth < 0.5) return;
         const g = worldToScreen({ x: p.x, y: p.y, z: 0 }, width, height);
         context.fillStyle = "rgba(20, 30, 24, .25)";
         context.beginPath();
@@ -3805,6 +3974,7 @@
           const z = a.z + (b.z - a.z) * k;
           const p = { x, y: 60.5 * (1 - u), z };
           const s = worldToScreen(p, width, height);
+          if (chaseCamera && s.depth < 0.5) return;
           const g = worldToScreen({ x, y: p.y, z: 0 }, width, height);
           context.fillStyle = "rgba(20, 30, 24, .25)";
           context.beginPath();
@@ -3822,6 +3992,7 @@
         if (!pitch.label) return;
         const end = pitch.path[pitch.path.length - 1];
         const spot = worldToScreen({ x: end.x, y: 0, z: end.z }, width, height);
+        if (chaseCamera && spot.depth < 0.5) return;
         context.font = "800 15px system-ui, sans-serif";
         context.textAlign = "center";
         context.textBaseline = "alphabetic";
@@ -3959,18 +4130,7 @@
               y: th.from.y + (th.to.y - th.from.y) * k,
               z: 5 + Math.min(22, dist * 0.1) * 4 * k * (1 - k)
             });
-            context.beginPath();
-            for (let step = 0; step <= 16; step += 1) {
-              const screen = worldToScreen(point(u * step / 16), width, height);
-              if (step === 0) context.moveTo(screen.x, screen.y);
-              else context.lineTo(screen.x, screen.y);
-            }
-            context.setLineDash([4, 3]);
-            context.strokeStyle = "#2b6fa6";
-            context.lineWidth = 1.6;
-            context.lineCap = "round";
-            context.stroke();
-            context.setLineDash([]);
+            drawWorldLine(Array.from({ length: 17 }, (_, step) => point(u * step / 16)), "#2b6fa6", 1.6, width, height, [4, 3]);
           }
           const ball = worldToScreen(ballPoint, width, height);
           const shadow = worldToScreen({ x: ballPoint.x, y: ballPoint.y, z: 0 }, width, height);
@@ -3980,7 +4140,7 @@
           context.ellipse(shadow.x, shadow.y, 1.5, 0.75, 0, 0, Math.PI * 2);
           context.fill();
           context.beginPath();
-          context.arc(ball.x, ball.y, 1.8, 0, Math.PI * 2);
+          context.arc(ball.x, ball.y, chaseCamera ? Math.max(2, Math.min(16, Math.min(width, height) * 0.08 / ball.depth)) : 1.8, 0, Math.PI * 2);
           context.fillStyle = "#fffefa";
           context.fill();
           context.lineWidth = 0.8;
@@ -4177,6 +4337,10 @@
       function drawReferenceGround(reference, width, height) {
         const image = referenceImageFor(reference);
         if (!image.complete || !image.naturalWidth) return;
+        if (chaseCamera) {
+          drawChaseGround(image, reference, width, height);
+          return;
+        }
         const origin = worldToScreen(referencePixelToWorld(0, 0, reference), width, height);
         const xAxis = worldToScreen(referencePixelToWorld(1, 0, reference), width, height);
         const yAxis = worldToScreen(referencePixelToWorld(0, 1, reference), width, height);
@@ -4189,6 +4353,45 @@
         context.imageSmoothingQuality = "high";
         context.drawImage(image, 0, 0, reference.width, reference.height);
         context.restore();
+      }
+
+      // Reproject the original park image in screen-aligned strips to avoid mesh seams.
+      function drawChaseGround(image, reference, width, height) {
+        const focal = Math.min(width, height) * 0.8;
+        const { eye } = chaseCamera;
+        const yaw = chaseCamera.yaw + chaseLook.yaw;
+        const pitch = Math.max(-1.45, Math.min(1.45, chaseCamera.pitch + chaseLook.pitch));
+        const sourceAt = (x, y) => {
+          const up = (height * 0.44 - y) / focal;
+          const vertical = Math.sin(pitch) + up * Math.cos(pitch);
+          const forward = Math.cos(pitch) - up * Math.sin(pitch);
+          const distance = -eye.z / vertical;
+          const side = (x - width / 2) / focal;
+          return worldToReferencePixel(
+            eye.x + distance * (Math.sin(yaw) * forward + Math.cos(yaw) * side),
+            eye.y + distance * (Math.cos(yaw) * forward - Math.sin(yaw) * side), reference
+          );
+        };
+        const horizon = height * 0.44 + focal * Math.tan(pitch);
+        context.imageSmoothingQuality = "high";
+        for (let y = Math.max(0, Math.floor(horizon) + 1); y < height; y += 2) {
+          const a = sourceAt(0, y), b = sourceAt(width, y), c = sourceAt(0, y + 2), d = sourceAt(width, y + 2);
+          const src = [a, b, c, d];
+          if (Math.max(...src.map((p) => p.x)) < 0 || Math.min(...src.map((p) => p.x)) > reference.width ||
+              Math.max(...src.map((p) => p.y)) < 0 || Math.min(...src.map((p) => p.y)) > reference.height) continue;
+          const ux = b.x - a.x, uy = b.y - a.y, vx = c.x - a.x, vy = c.y - a.y;
+          const det = ux * vy - uy * vx;
+          if (Math.abs(det) < 1e-9) continue;
+          const ax = width * vy / det, bx = -width * vx / det;
+          const ay = -2 * uy / det, by = 2 * ux / det;
+          context.save();
+          context.beginPath();
+          context.rect(0, y - 0.6, width, Math.min(3.2, height - y + 0.6));
+          context.clip();
+          context.transform(ax, ay, bx, by, -ax * a.x - bx * a.y, y - ay * a.x - by * a.y);
+          context.drawImage(image, 0, 0, reference.width, reference.height);
+          context.restore();
+        }
       }
 
       function render() {
@@ -4579,6 +4782,10 @@
       }
 
       function zoomCamera(factor) {
+        if (zoomFollowCamera(factor)) {
+          render3D();
+          return;
+        }
         takeCameraControl();
         camera.scale = Math.max(zoomMinimum, Math.min(zoomMaximum, camera.scale * factor));
         render3D();
@@ -4636,6 +4843,7 @@
         if (pinch.size === 2) {
           pinchDistance = pinchSpan();
           dragState = null;
+          endChaseLook();
           event.stopImmediatePropagation();
         }
       }, true);
@@ -4663,6 +4871,9 @@
           elevation: camera.elevation,
           targetX: camera.targetX,
           targetY: camera.targetY,
+          followLook: event.button === 0 && !event.shiftKey && beginChaseLook(),
+          lookYaw: chaseLook.yaw,
+          lookPitch: chaseLook.pitch,
           mode: event.button !== 0 || event.shiftKey ? "pan" : "orbit",
           moved: false
         };
@@ -4674,6 +4885,12 @@
         const deltaY = event.clientY - dragState.startY;
         if (Math.abs(deltaX) + Math.abs(deltaY) > 4) dragState.moved = true;
         if (!dragState.moved) return;
+        if (dragState.followLook && chaseLook.held) {
+          chaseLook.yaw = Math.atan2(Math.sin(dragState.lookYaw - deltaX * .008), Math.cos(dragState.lookYaw - deltaX * .008));
+          chaseLook.pitch = Math.max(-1.2, Math.min(1.2, dragState.lookPitch + deltaY * .006));
+          render3D();
+          return;
+        }
         takeCameraControl();
         if (dragState.mode === "pan") {
           camera.targetX = dragState.targetX;
@@ -4690,12 +4907,16 @@
         const wasDragged = dragState.moved;
         const interactionMode = dragState.mode;
         dragState = null;
+        endChaseLook();
         if (!IS_GAME && !wasDragged && interactionMode === "orbit" && event.button === 0) {
           const location = canvasPointToWorld(event.clientX, event.clientY);
           setAim(location.x, location.y);
         }
       });
-      canvas.addEventListener("pointercancel", () => { dragState = null; });
+      const releaseCameraDrag = () => { dragState = null; endChaseLook(); };
+      canvas.addEventListener("pointercancel", releaseCameraDrag);
+      canvas.addEventListener("lostpointercapture", releaseCameraDrag);
+      window.addEventListener("blur", releaseCameraDrag);
       canvas.addEventListener("contextmenu", (event) => event.preventDefault());
       canvas.addEventListener("wheel", (event) => {
         event.preventDefault();

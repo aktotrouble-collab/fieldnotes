@@ -3437,7 +3437,7 @@
           const p = pathPoint(e.prog);
           const approaching = e.state === 'run' && e.target < 4 && e.target - e.prog <= 0.9;
           return {
-            id: e.id, x: p.x, y: p.y, state: e.state, out: e.out, scored: e.scored, name: e.r.p.name,
+            id: e.id, isBatter: e.isBatter, x: p.x, y: p.y, state: e.state, out: e.out, scored: e.scored, name: e.r.p.name,
             base: e.state === 'run' ? e.target : Math.round(e.prog),
             decide: approaching ? { base: e.target, cont: e.userCont, ai: aiGo(e, e.target + 1), blocked: blocked(e.target + 1) } : null,
             canGo: e.state === 'hold' && e.prog < 4 && !blocked(e.prog + 1),
