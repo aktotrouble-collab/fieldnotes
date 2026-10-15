@@ -47,8 +47,15 @@
     td select { padding:3px; }
     td button { padding:1px 6px; }
     .errors { color:#b3392f; margin-top:8px; white-space:pre-line; }
-    .game { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(0,1fr); gap:14px; align-items:start; }
-    @media (max-width:1000px) { .game { grid-template-columns:1fr; } }
+    .game { display:flex; flex-direction:column; gap:14px; }
+    .game > div { display:contents; }
+    .game > div:first-child > .card:nth-child(1) { order:1; }
+    .game > div:last-child > .card:nth-child(1) { order:2; }
+    .game > div:last-child > .card:nth-child(2) { order:3; }
+    .game > div:first-child > .card:nth-child(2) { order:4; }
+    .game > div:first-child > .card:nth-child(3) { order:5; }
+    main:has(#play:not(.hidden)) { max-width:none; }
+    @media (max-width:1000px) { .game { gap:10px; } }
     canvas { width:100%; display:block; border-radius:8px; background:#e8efe0; }
     #zone-canvas { cursor:crosshair; background:#f1efe6; max-width:340px; margin:0 auto; }
     .score table td, .score table th { text-align:center; font-size:13px; padding:4px 7px; }
@@ -127,15 +134,30 @@
     #chal-menu button:disabled { opacity:.45; cursor:default; }
     #chal-menu .sub { padding-left:14px; display:flex; flex-direction:column; gap:4px; }
     .box h3 { margin:8px 0 4px; font-size:13px; }
-    .tip { display:inline-flex; align-items:center; justify-content:center; width:15px; height:15px; margin:0 3px; border-radius:50%; border:1px solid var(--mute); color:var(--mute); font:italic 700 10px/1 Georgia,serif; cursor:help; vertical-align:middle; user-select:none; outline:none; }
-    .tip:hover, .tip:focus { background:var(--green); border-color:var(--green); color:#fff; }
+    .tip { display:inline-flex; align-items:center; justify-content:center; width:11px; height:11px; margin:0 2px 0 1px; opacity:.45; border-radius:50%; border:1px solid var(--mute); color:var(--mute); font:italic 700 8px/1 Georgia,serif; cursor:help; vertical-align:middle; user-select:none; outline:none; }
+    .tip:hover, .tip:focus { opacity:1; background:var(--green); border-color:var(--green); color:#fff; }
+    html.no-help i.tip { display:none !important; }
+    .help-toggle { display:inline-flex !important; flex-direction:row !important; align-items:center; gap:5px; white-space:nowrap; color:inherit; font-size:12px; cursor:pointer; user-select:none; }
+    .help-toggle input { margin:0; width:auto; padding:0; }
     #tip-pop { position:fixed; z-index:1000; max-width:300px; padding:8px 10px; border-radius:8px; background:rgba(14,24,20,.95); color:#fff; font-size:12px; line-height:1.4; box-shadow:0 4px 16px rgba(0,0,0,.35); pointer-events:none; display:none; }
+    .roster td, .roster th { padding:4px 8px; text-align:left; }
+    .roster-row { cursor:pointer; }
+    .roster .grip { cursor:grab; touch-action:none; user-select:none; white-space:nowrap; }
+    .roster-row.dragging { background:#2f7d4f33; box-shadow:0 2px 10px rgba(0,0,0,.25); position:relative; z-index:2; }
+    .roster-row:hover { background:#0000000d; }
+    .modal-back { position:fixed; inset:0; z-index:900; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; padding:16px; }
+    .modal { background:var(--card); border-radius:12px; padding:16px 18px; width:min(420px,100%); max-height:90vh; overflow:auto; box-shadow:0 8px 32px rgba(0,0,0,.4); }
+    .modal h3 { margin:0 0 4px; }
+    .modal-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px 12px; }
+    .modal-grid label { display:flex; flex-direction:column; gap:2px; font-size:12px; }
+    .modal-grid input, .modal-grid select { width:100%; box-sizing:border-box; }
   </style>
 </head>
 <body>
+  <script>if (localStorage.getItem("field-notes-help-v1") === "off") document.documentElement.classList.add("no-help");</script>
   <header>
     <div><strong>Field Notes</strong><span>Game mode</span></div>
-    <a href="index.html">&larr; Spray chart</a>
+    <div style="display:flex;gap:16px;align-items:center"><label class="help-toggle" title="When on, foul balls that clear the foul wall stop there. Turn off to watch them fly."><input type="checkbox" id="foul-stop"> Stop fouls</label><label class="help-toggle" title="Show or hide the small i hints next to settings"><input type="checkbox" id="help-toggle"> Show hints</label><a href="league.html" target="_blank">League</a><a href="index.html">&larr; Spray chart</a></div>
   </header>
   <main>
     <section id="setup">
@@ -180,6 +202,15 @@
               <option value="inning">Re-rolled each inning</option>
             </select>
           </label>
+          <label>Temperature <i class="tip" tabindex="0" data-tip="Warm air is thinner, so balls carry farther: roughly 3 ft per 10°F on a long fly ball. Standard: 70°F. I set it: choose the temperature. Random: 40 to 100°F. Random, weighted: around the park's typical game-time temperature. Closed roofs are 72°F unless you set it.">i</i>
+            <select id="tp-mode">
+              <option value="standard">Standard (70°F)</option>
+              <option value="fixed">I set it</option>
+              <option value="random">Random</option>
+              <option value="park">Random, weighted to the park's real climate</option>
+            </select>
+          </label>
+          <label id="tp-fixed" style="display:none">Degrees (°F) <input id="tp-temp" type="number" step="any" value="70" style="width:80px"></label>
           <label>Altitude (ft) <i class="tip" tabindex="0" data-tip="Thinner air at altitude means less drag, so balls carry farther. Leave blank to use the park's real elevation.">i</i> <input id="wx-alt" type="number" step="any" placeholder="park default" style="width:120px"></label>
           <label>Roof <i class="tip" tabindex="0" data-tip="Only matters at parks with a retractable roof. A closed roof means no wind.">i</i> <select id="wx-roof"><option value="closed">Closed</option><option value="open">Open</option></select></label>
           <div id="wx-fixed" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
@@ -211,7 +242,7 @@
         <div>
           <div class="card">
             <div id="field-wrap">
-              <iframe id="field-frame" title="3D field" src="index.html?embed=1&amp;game=1&amp;park=dodgers" style="width:100%;height:640px;border:0;border-radius:8px;display:block"></iframe>
+              <iframe id="field-frame" title="3D field" src="index.html?embed=1&amp;game=1&amp;park=dodgers" style="width:100%;height:clamp(640px,78vh,960px);border:0;border-radius:8px;display:block"></iframe>
               <div id="bug"></div>
               <div id="umpbar"><span id="ump-text"></span><div class="tbar"><i id="ump-bar"></i></div><button id="ump-btn">Challenge</button></div>
               <div id="chal-menu"></div>
@@ -226,6 +257,7 @@
             </div>
             <div class="row" style="margin-top:8px">
               <button class="primary" id="btn-pitch">Next pitch</button>
+              <button id="btn-autopause" class="hidden">Pause</button>
               <button id="btn-pa">Sim At-Bat</button>
               <button id="btn-half">Sim Half-Inning</button>
               <button id="btn-game">Sim to end</button>
@@ -273,6 +305,7 @@
             <div class="row" style="margin-top:10px">
               <button id="btn-export">Send balls to spray chart</button>
               <button id="btn-new">New game</button>
+              <button id="btn-league" class="primary hidden">Return to league</button>
             </div>
           </div>
           <div class="card box" id="box"></div>
@@ -295,6 +328,25 @@
   <div id="tip-pop" role="tooltip"></div>
   <script>
     (() => {
+      const stop = document.getElementById("foul-stop");
+      if (stop) {
+        let on = true;
+        try { on = localStorage.getItem("field-notes-foulstop-v1") !== "off"; } catch (error) { /* ignore */ }
+        stop.checked = on;
+        window.addEventListener("load", () => { if (window.GameEngine) window.GameEngine.settings.foulOver = !on; });
+        stop.addEventListener("change", () => {
+          if (window.GameEngine) window.GameEngine.settings.foulOver = !stop.checked;
+          try { localStorage.setItem("field-notes-foulstop-v1", stop.checked ? "on" : "off"); } catch (error) { /* ignore */ }
+        });
+      }
+      const toggle = document.getElementById("help-toggle");
+      if (toggle) {
+        toggle.checked = !document.documentElement.classList.contains("no-help");
+        toggle.addEventListener("change", () => {
+          document.documentElement.classList.toggle("no-help", !toggle.checked);
+          try { localStorage.setItem("field-notes-help-v1", toggle.checked ? "on" : "off"); } catch (error) { /* ignore */ }
+        });
+      }
       const pop = document.getElementById("tip-pop");
       const show = (el) => {
         pop.textContent = el.dataset.tip;
@@ -315,8 +367,10 @@
     })();
   </script>
   <script src="park-walls.js"></script>
+  <script src="foul-walls.js"></script>
   <script src="players-data.js" onerror="void 0"></script>
   <script src="game-engine.js"></script>
+  <script src="league-engine.js"></script>
   <script>
   (() => {
     const E = window.GameEngine;
@@ -393,7 +447,14 @@
       $("wx-dial").innerHTML = svg;
       const alt = $("wx-alt").value.trim() === "" ? info.alt : Number($("wx-alt").value) || 0;
       const rho = E.airDensity(alt);
+      const tmode = $("tp-mode").value;
+      $("tp-fixed").style.display = tmode === "fixed" ? "" : "none";
       let text = `Altitude ${Math.round(alt).toLocaleString()} ft: air ${Math.round(rho * 100)}% as dense as sea level. `;
+      if (tmode === "fixed") {
+        const t = $("tp-temp").value === "" ? 70 : Number($("tp-temp").value);
+        text += `${t}°F changes air density ${Math.round((E.tempFactor(t) - 1) * 1000) / 10}% vs 70°F. `;
+      } else if (tmode === "park") text += `Typical temperature here: about ${E.PARK_TEMP[$("park").value] || 70}°F. `;
+      else if (tmode === "random") text += "Temperature is rolled at random (40 to 100°F). ";
       if (info.roof === "dome") text += "Fixed dome: no wind. ";
       else if (retract && $("wx-roof").value === "closed") text += "Roof closed: no wind. ";
       if (mode === "fixed") {
@@ -425,7 +486,7 @@
     $("wx-dial").addEventListener("pointerdown", (event) => { dialDrag = true; $("wx-dial").setPointerCapture(event.pointerId); dialSet(event); });
     $("wx-dial").addEventListener("pointermove", (event) => { if (dialDrag) dialSet(event); });
     $("wx-dial").addEventListener("pointerup", () => { dialDrag = false; });
-    ["park", "wx-mode", "wx-var", "wx-alt", "wx-roof", "wx-speed", "wx-from"].forEach((id) => {
+    ["park", "wx-mode", "wx-var", "wx-alt", "wx-roof", "wx-speed", "wx-from", "tp-mode", "tp-temp"].forEach((id) => {
       $(id).addEventListener("input", wxRender);
       $(id).addEventListener("change", wxRender);
     });
@@ -436,8 +497,25 @@
     const withMeta = (fresh, old, index) => {
       fresh.abbr = old && old.abbr !== undefined ? old.abbr : (fresh.abbr || "");
       fresh.color = (old && old.color) || fresh.color || DEFAULT_COLORS[index];
+      if (old && old.year) fresh.year = old.year;
       return fresh;
     };
+    /* Season data: the latest season ships in players-data.js; earlier ones (seasons/players-YYYY.js) load on demand. */
+    const latestYear = window.MLB_PLAYERS ? window.MLB_PLAYERS.year : null;
+    const FIRST_SEASON = 2015;
+    const seasonOf = (team) => {
+      const y = team && team.year;
+      if (y && y !== latestYear && window.MLB_SEASONS && window.MLB_SEASONS[y]) return window.MLB_SEASONS[y];
+      return window.MLB_PLAYERS;
+    };
+    function loadSeason(year, done) {
+      if (year === latestYear || (window.MLB_SEASONS && window.MLB_SEASONS[year])) return done(true);
+      const s = document.createElement("script");
+      s.src = `seasons/players-${year}.js`;
+      s.onload = () => done(true);
+      s.onerror = () => { s.remove(); done(false); };
+      document.head.append(s);
+    }
     const teamAbbr = (team) => (String(team.abbr || "").trim() || autoAbbr(team.name)).toUpperCase().slice(0, 4);
     const inkOn = (hex) => {
       const n = parseInt(String(hex).replace("#", ""), 16) || 0;
@@ -472,7 +550,8 @@
       return [withMeta(E.generateTeam("Away", "balanced", Date.now() % 100000), null, 0), withMeta(E.generateTeam("Home", "balanced", (Date.now() + 7) % 100000), null, 1)];
     }
     teams = loadTeams();
-    const saveTeams = () => { try { localStorage.setItem(TEAMS_KEY, JSON.stringify(teams)); } catch (error) { /* ignore */ } };
+    // Session edits keep the original ratings in a hidden _orig, so what gets saved is always the unedited player.
+    const saveTeams = () => { try { localStorage.setItem(TEAMS_KEY, JSON.stringify(teams, (k, v) => (v && v._orig ? { ...v, ...v._orig } : v))); } catch (error) { /* ignore */ } };
 
     const f1 = (v) => (Math.round(v * 10) / 10).toFixed(1);
     // Recomputes every OVR cell and team rating strip in place (so typing never loses focus).
@@ -520,9 +599,51 @@
     }
     function cell(row, node) { const td = row.insertCell(); td.append(node); return td; }
     // Position dropdown plus a badge showing the FLD lost when the player isn't natural at that spot.
-    function posCell(row, player) {
+    function confirmBox(message, onYes, onNo) {
+      const wrap = document.createElement("div");
+      wrap.className = "modal-back";
+      const box = document.createElement("div");
+      box.className = "modal";
+      const text = document.createElement("h3");
+      text.textContent = message;
+      const actions = document.createElement("div");
+      actions.className = "row";
+      actions.style.marginTop = "12px";
+      const yes = document.createElement("button");
+      yes.textContent = "Yes";
+      const no = document.createElement("button");
+      no.textContent = "Cancel";
+      const finish = (cb) => { wrap.remove(); document.removeEventListener("keydown", onKey); cb(); };
+      const onKey = (e) => { if (e.key === "Escape") finish(onNo); else if (e.key === "Enter") finish(onYes); };
+      yes.addEventListener("click", () => finish(onYes));
+      no.addEventListener("click", () => finish(onNo));
+      wrap.addEventListener("mousedown", (e) => { if (e.target === wrap) finish(onNo); });
+      document.addEventListener("keydown", onKey);
+      actions.append(yes, no);
+      box.append(text, actions);
+      wrap.append(box);
+      document.body.append(wrap);
+      yes.focus();
+    }
+    // Moving a player onto a spot someone else holds swaps the two, after asking.
+    function posCell(row, player, team) {
       if (!player.natural) player.natural = player.pos;
-      const td = cell(row, selectInput(player, "pos", POS_OPTIONS));
+      const select = document.createElement("select");
+      for (const option of POS_OPTIONS) select.add(new Option(option, option));
+      select.value = player.pos;
+      select.addEventListener("change", () => {
+        const to = select.value;
+        const from = player.pos;
+        const other = team.lineup.find((q) => q !== player && q.pos === to);
+        if (!other) { player.pos = to; saveTeams(); return; }
+        confirmBox(`Change ${other.name} to ${from}?`, () => {
+          other.pos = from;
+          player.pos = to;
+          saveTeams();
+          renderTeams();
+        }, () => { select.value = from; });
+      });
+      const td = cell(row, select);
       const badge = document.createElement("span");
       badge.style.cssText = "font-size:11px;color:#b3392f;margin-left:4px;white-space:nowrap";
       const update = () => {
@@ -537,12 +658,59 @@
       td.append(badge);
     }
 
+    // Bench: every position he can play with no FLD loss.
+    function posText(row, player) {
+      if (!player.natural) player.natural = player.pos;
+      const ok = E.POSITIONS.filter((p) => E.positionPenalty(player, p) === 0);
+      if (!ok.length) ok.push(player.natural);
+      row.insertCell().textContent = ok.join(", ");
+    }
+    // Drag a lineup row by its grip; rows shift as it passes them, then the lineup array is reordered to match.
+    function startDrag(e, row, body, team) {
+      e.preventDefault();
+      row.classList.add("dragging");
+      const move = (ev) => {
+        const others = [...body.rows].filter((r) => r !== row);
+        const after = others.find((r) => { const b = r.getBoundingClientRect(); return ev.clientY < b.top + b.height / 2; });
+        if (after) { if (row.nextSibling !== after) body.insertBefore(row, after); }
+        else if (row !== body.lastElementChild) body.append(row);
+      };
+      const up = () => {
+        document.removeEventListener("pointermove", move);
+        document.removeEventListener("pointerup", up);
+        document.removeEventListener("pointercancel", up);
+        row.classList.remove("dragging");
+        const order = [...body.rows].map((r) => Number(r.dataset.i));
+        if (order.some((v, i) => v !== i)) { team.lineup = order.map((i) => team.lineup[i]); saveTeams(); }
+        renderTeams();
+      };
+      document.addEventListener("pointermove", move);
+      document.addEventListener("pointerup", up);
+      document.addEventListener("pointercancel", up);
+    }
+
     /* Real MLB players (players-data.js, built by build-players.js from Baseball Savant). */
     const plain = (s) => String(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
     function playerSearch(team, ti) {
-      const data = window.MLB_PLAYERS;
+      const data = seasonOf(team);
       const box = document.createElement("div");
       box.style.cssText = "margin-top:10px";
+      const yearSel = document.createElement("select");
+      for (let y = latestYear; y >= FIRST_SEASON; y--) yearSel.add(new Option(y, y));
+      yearSel.value = data.year;
+      yearSel.addEventListener("change", () => {
+        const y = Number(yearSel.value);
+        yearSel.disabled = true;
+        loadSeason(y, (ok) => {
+          if (ok) { team.year = y; saveTeams(); } else alert(`Couldn't load ${y} player data.`);
+          renderTeams();
+        });
+      });
+      const yearTip = document.createElement("i");
+      yearTip.className = "tip";
+      yearTip.tabIndex = 0;
+      yearTip.textContent = "i";
+      yearTip.dataset.tip = "Season the player search, whole-team import and random MLB players draw from (Statcast era, 2015 onward). Ratings are measured against that season's league. Arm strength is only tracked from 2020, so earlier seasons use each player's first tracked arm rating (position-based guess if none), and 2015 has no defensive data so FLD starts at 50.";
       const input = document.createElement("input");
       input.type = "search";
       input.placeholder = `Search ${data.year} MLB players (name or team)…`;
@@ -562,11 +730,16 @@
       const teamBtn = document.createElement("button");
       teamBtn.textContent = "Load best lineup";
       teamBtn.addEventListener("click", () => {
-        Object.assign(team, bestMlbTeam(teamSel.value));
+        Object.assign(team, bestMlbTeam(teamSel.value, data));
         const club = MLB_CLUBS[teamSel.value];
         team.abbr = teamSel.value;
         team.club = teamSel.value;
-        if (club) { team.name = club[0]; team.color = club[1]; }
+        team.src = { club: teamSel.value, year: data.year };
+        if (club) {
+          team.name = teamSel.value === "CLE" && data.year <= 2021 ? "Cleveland Indians" : club[0];
+          team.color = club[1];
+        } else team.name = teamSel.value;
+        if (data.year !== latestYear) team.name = `${data.year} ${team.name}`;
         saveTeams();
         renderTeams();
       });
@@ -575,7 +748,7 @@
       teamTip.tabIndex = 0;
       teamTip.textContent = "i";
       teamTip.dataset.tip = "Replaces this team's lineup, bench and pitchers with the best arrangement of a real MLB team's players: each position goes to the best natural fielder there (DH to the best leftover bat), the batting order is built from the ratings, the bench covers catcher, infield and outfield, and the staff is the top starter plus the best relievers. Team name, abbreviation and color are set to the club's too.";
-      teamRow.append("Import whole team", teamSel, teamBtn, teamTip);
+      teamRow.append("Season", yearSel, yearTip, "Import whole team", teamSel, teamBtn, teamTip);
       box.append(teamRow, input, results);
 
       const pool = [
@@ -646,6 +819,7 @@
       CWS: ["Chicago White Sox", "#27251f"], DET: ["Detroit Tigers", "#0c2340"], HOU: ["Houston Astros", "#eb6e1f"],
       KC: ["Kansas City Royals", "#004687"], LAA: ["Los Angeles Angels", "#ba0021"], LAD: ["Los Angeles Dodgers", "#005a9c"],
       MIA: ["Miami Marlins", "#00a3e0"], MIL: ["Milwaukee Brewers", "#12284b"], MIN: ["Minnesota Twins", "#002b5c"],
+      OAK: ["Oakland Athletics", "#006a4e"],
       NYM: ["New York Mets", "#ff5910"], NYY: ["New York Yankees", "#0c2340"], PHI: ["Philadelphia Phillies", "#e81828"],
       PIT: ["Pittsburgh Pirates", "#fdb827"], SD: ["San Diego Padres", "#2f241d"], SEA: ["Seattle Mariners", "#005c5c"],
       SF: ["San Francisco Giants", "#fd5a1e"], STL: ["St. Louis Cardinals", "#c41e3a"], TB: ["Tampa Bay Rays", "#092c5c"],
@@ -653,8 +827,7 @@
     };
 
     /* Best lineup, bench and staff from one real MLB team's players. */
-    function bestMlbTeam(code) {
-      const data = window.MLB_PLAYERS;
+    function bestMlbTeam(code, data) {
       const ovr = (p) => E.batterOverall(p);
       const bats = data.batters.filter((p) => p.team === code).sort((a, b) => ovr(b) - ovr(a));
       const toBatter = (p, pos) => ({
@@ -721,7 +894,7 @@
 
     /* Random team of real MLB players, either uniformly random or weighted toward higher-rated players. */
     function mlbTeam(team, weighted) {
-      const data = window.MLB_PLAYERS;
+      const data = seasonOf(team);
       const weight = (ovr) => (weighted ? Math.pow(Math.max(ovr, 1) / 50, 4) : 1);
       const draw = (list, score) => {
         if (!list.length) return null;
@@ -763,6 +936,133 @@
         pitchers.push(toPitcher(x.p, "RP"));
       }
       return { name: team.name, style: team.style || "balanced", scale: 2, lineup, bench, pitchers };
+    }
+
+    /* Compact roster rows: hover for attributes, click to edit them for this session only. */
+    const ATTR_LABELS = { contact: "CON", power: "PWR", eye: "EYE", speed: "SPD", arm: "ARM", field: "FLD", risk: "RISK", velo: "VELO", control: "CTL", movement: "MOV", stamina: "STA" };
+    const PIT_KEYS = ["velo", "control", "movement", "stamina"];
+    const EDIT_KEYS = ["name", "pos", "bats", "throws", ...BAT_KEYS, ...PIT_KEYS];
+    const attrSummary = (p, isPitcher) => (isPitcher ? PIT_KEYS : BAT_KEYS).map((k) => `${ATTR_LABELS[k]} ${p[k] ?? "–"}`).join(" · ");
+    function showRowTip(row, p, isPitcher) {
+      const pop = $("tip-pop");
+      const pen = isPitcher ? 0 : E.positionPenalty(p, p.pos);
+      const lines = [isPitcher ? `${p.throws}HP` : `${p.pos} · bats ${p.bats}${pen ? ` · −${pen} FLD out of position` : ""}`, attrSummary(p, isPitcher)];
+      if (p._orig) lines.push("Edited this session");
+      lines.push("Click to edit");
+      pop.textContent = "";
+      lines.forEach((t, i) => { const d = document.createElement("div"); d.textContent = t; if (i === 0) d.style.fontWeight = "700"; pop.append(d); });
+      pop.style.display = "block";
+      const r = row.getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
+      pop.style.left = Math.max(6, Math.min(innerWidth - w - 6, r.left + 40)) + "px";
+      pop.style.top = Math.max(6, r.bottom + 4 + h > innerHeight ? r.top - h - 4 : r.bottom + 4) + "px";
+    }
+    const seasonData = (y) => (y === latestYear ? window.MLB_PLAYERS : window.MLB_SEASONS && window.MLB_SEASONS[y]);
+    // Search box for the edit popup: pick a season and a real player to fill in all of the ratings.
+    function editorSearch(player, isPitcher, applied, isNew) {
+      const box = document.createElement("div");
+      box.style.cssText = "margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid #0002";
+      const row = document.createElement("div");
+      row.className = "row";
+      row.style.cssText = "gap:6px;margin-bottom:4px";
+      const yearSel = document.createElement("select");
+      for (let y = latestYear; y >= FIRST_SEASON; y--) yearSel.add(new Option(y, y));
+      const input = document.createElement("input");
+      input.type = "search";
+      input.placeholder = "Search MLB players…";
+      input.style.cssText = "flex:1 1 140px;min-width:0";
+      row.append(yearSel, input);
+      const results = document.createElement("div");
+      results.style.fontSize = "13px";
+      box.append(row, results);
+      const show = () => {
+        results.innerHTML = "";
+        const words = plain(input.value).split(/\s+/).filter(Boolean);
+        if (!words.length) return;
+        const y = Number(yearSel.value);
+        const data = seasonData(y);
+        if (!data) { results.textContent = "Loading…"; loadSeason(y, (ok) => { if (ok) show(); else results.textContent = "Couldn't load that season."; }); return; }
+        const list = isPitcher ? data.pitchers : data.batters;
+        const hits = list.filter((p) => words.every((w) => plain(`${p.name} ${p.team}`).includes(w)))
+          .sort((a, b) => (isPitcher ? b.ip - a.ip : b.pa - a.pa)).slice(0, 6);
+        if (!hits.length) { results.textContent = "No match."; return; }
+        for (const p of hits) {
+          const b = document.createElement("button");
+          b.style.cssText = "display:block;width:100%;text-align:left;margin-top:3px";
+          b.textContent = `${p.name} · ${p.team} ${y} · ${isPitcher ? p.role : p.pos} · OVR ${Math.round(isPitcher ? E.pitcherOverall(p) : E.batterOverall(p))}`;
+          b.addEventListener("click", () => {
+            if (isPitcher) Object.assign(player, { name: p.name, throws: p.throws, velo: p.velo, control: p.control, movement: p.movement, stamina: p.stamina, mlb: p.id });
+            else Object.assign(player, { name: p.name, bats: p.bats, contact: p.contact, power: p.power, eye: p.eye, speed: p.speed, arm: p.arm, field: p.field, risk: p.risk, loft: p.loft, mlb: p.id, natural: p.pos, alt: p.alt || [] });
+            if (!isPitcher && isNew) player.pos = p.pos;
+            applied();
+          });
+          results.append(b);
+        }
+      };
+      input.addEventListener("input", show);
+      yearSel.addEventListener("change", show);
+      return box;
+    }
+    function openEditor(player, isPitcher, onClose, isNew) {
+      $("tip-pop").style.display = "none";
+      if (!player._orig) {
+        const snap = {};
+        for (const k of EDIT_KEYS) if (player[k] !== undefined) snap[k] = player[k];
+        Object.defineProperty(player, "_orig", { value: snap, writable: true, configurable: true, enumerable: false });
+      }
+      const wrap = document.createElement("div");
+      wrap.className = "modal-back";
+      const box = document.createElement("div");
+      box.className = "modal";
+      wrap.append(box);
+      const close = () => { wrap.remove(); document.removeEventListener("keydown", onKey); onClose(); };
+      const onKey = (e) => { if (e.key === "Escape") close(); };
+      const build = () => {
+        box.innerHTML = "";
+        const title = document.createElement("h3");
+        title.textContent = isNew ? "Add player" : "Edit player";
+        const note = document.createElement("div");
+        note.className = "muted";
+        note.style.cssText = "font-size:12px;margin-bottom:10px";
+        note.textContent = "Search a real player or type the ratings yourself. Changes last for this session only; reloading restores the original ratings.";
+        const grid = document.createElement("div");
+        grid.className = "modal-grid";
+        const field = (label, node) => { const l = document.createElement("label"); l.append(label, node); grid.append(l); };
+        const nameIn = textInput(player, "name");
+        field("Name", nameIn);
+        if (isPitcher) field("Throws", selectInput(player, "throws", ["R", "L"]));
+        else { field("Position", selectInput(player, "pos", POS_OPTIONS)); field("Bats", selectInput(player, "bats", ["R", "L", "S"])); }
+        for (const key of isPitcher ? PIT_KEYS : BAT_KEYS) {
+          if (player[key] === undefined) player[key] = 50;
+          field(ATTR_LABELS[key], numInput(player, key));
+        }
+        const actions = document.createElement("div");
+        actions.className = "row";
+        actions.style.marginTop = "12px";
+        const done = document.createElement("button");
+        done.textContent = "Done";
+        const reset = document.createElement("button");
+        reset.textContent = "Reset to original";
+        done.addEventListener("click", close);
+        reset.addEventListener("click", () => { Object.assign(player, player._orig); build(); });
+        actions.append(done, reset);
+        box.append(title, note, editorSearch(player, isPitcher, build, isNew), grid, actions);
+        return nameIn;
+      };
+      wrap.addEventListener("mousedown", (e) => { if (e.target === wrap) close(); });
+      document.addEventListener("keydown", onKey);
+      const nameIn = build();
+      document.body.append(wrap);
+      if (!isNew) nameIn.focus();
+    }    function rosterRow(body, player, isPitcher, onEdited) {
+      const row = body.insertRow();
+      row.className = "roster-row";
+      row.addEventListener("mouseenter", () => showRowTip(row, player, isPitcher));
+      row.addEventListener("mouseleave", () => { $("tip-pop").style.display = "none"; });
+      row.addEventListener("click", (e) => {
+        if (e.target.closest("button, select, .grip")) return;
+        openEditor(player, isPitcher, () => { saveTeams(); onEdited(); });
+      });
+      return row;
     }
 
     const randMode = ["gen", "gen"];
@@ -835,34 +1135,24 @@
         card.append(strip);
         if (window.MLB_PLAYERS) card.append(playerSearch(team, ti));
         const batters = document.createElement("table");
+        batters.className = "roster";
         batters.style.marginTop = "10px";
         const header = batters.createTHead().insertRow();
-        ["#", "Name", "Pos", "Bats", "CON", "PWR", "EYE", "SPD", "ARM", "FLD", "RISK", "OVR", ""].forEach((text) => { header.insertCell().outerHTML = `<th>${text}</th>`; });
+        ["#", "Name", "Pos", "OVR"].forEach((text) => { header.insertCell().outerHTML = `<th>${text}</th>`; });
         const body = batters.createTBody();
         team.lineup.forEach((player, index) => {
-          const row = body.insertRow();
-          row.insertCell().textContent = index + 1;
-          cell(row, textInput(player, "name"));
-          posCell(row, player);
-          cell(row, selectInput(player, "bats", ["R", "L", "S"]));
-          for (const key of BAT_KEYS) { if (player[key] === undefined) player[key] = 50; cell(row, numInput(player, key)); }
+          const row = rosterRow(body, player, false, renderTeams);
+          row.dataset.i = index;
+          const grip = row.insertCell();
+          grip.className = "grip";
+          grip.textContent = "⠿ " + (index + 1);
+          grip.title = "Drag to reorder";
+          grip.addEventListener("pointerdown", (e) => startDrag(e, row, body, team));
+          row.insertCell().textContent = player.name;
+          posCell(row, player, team);
           const ovr = row.insertCell();
           ovr.dataset.ovr = `${ti}:l:${index}`;
           ovr.style.fontWeight = "700";
-          const move = document.createElement("span");
-          for (const [label, delta] of [["▲", -1], ["▼", 1]]) {
-            const button = document.createElement("button");
-            button.textContent = label;
-            button.addEventListener("click", () => {
-              const to = index + delta;
-              if (to < 0 || to >= team.lineup.length) return;
-              [team.lineup[index], team.lineup[to]] = [team.lineup[to], team.lineup[index]];
-              saveTeams();
-              renderTeams();
-            });
-            move.append(button);
-          }
-          cell(row, move);
         });
         card.append(batters);
 
@@ -871,15 +1161,14 @@
         benchTitle.style.cssText = "margin-top:12px;font-weight:600";
         benchTitle.textContent = "Bench (pinch hitters, pinch runners, defensive replacements)";
         const bench = document.createElement("table");
+        bench.className = "roster";
         const bh = bench.createTHead().insertRow();
-        ["Name", "Pos", "Bats", "CON", "PWR", "EYE", "SPD", "ARM", "FLD", "RISK", "OVR", ""].forEach((text) => { bh.insertCell().outerHTML = `<th>${text}</th>`; });
+        ["Name", "Pos", "OVR", ""].forEach((text) => { bh.insertCell().outerHTML = `<th>${text}</th>`; });
         const bb = bench.createTBody();
         team.bench.forEach((player, index) => {
-          const row = bb.insertRow();
-          cell(row, textInput(player, "name"));
-          posCell(row, player);
-          cell(row, selectInput(player, "bats", ["R", "L", "S"]));
-          for (const key of BAT_KEYS) { if (player[key] === undefined) player[key] = 50; cell(row, numInput(player, key)); }
+          const row = rosterRow(bb, player, false, renderTeams);
+          row.insertCell().textContent = player.name;
+          posText(row, player);
           const ovr = row.insertCell();
           ovr.dataset.ovr = `${ti}:b:${index}`;
           ovr.style.fontWeight = "700";
@@ -892,24 +1181,38 @@
         addBench.textContent = "Add bench player";
         addBench.style.marginTop = "6px";
         addBench.addEventListener("click", () => {
-          team.bench.push({ name: "Bench " + (team.bench.length + 1), pos: "CF", bats: "R", contact: 45, power: 45, eye: 45, speed: 50, arm: 50, field: 50, risk: 50 });
-          saveTeams();
+          const src = team.src;
+          const data = src && seasonData(src.year);
+          if (data) {
+            const used = new Set([...team.lineup, ...team.bench].map((q) => q.mlb).filter(Boolean));
+            const next = data.batters.filter((p) => p.team === src.club && !used.has(p.id)).sort((a, b) => E.batterOverall(b) - E.batterOverall(a))[0];
+            if (next) {
+              team.bench.push({
+                name: next.name, pos: next.pos, bats: next.bats, contact: next.contact, power: next.power, eye: next.eye,
+                speed: next.speed, arm: next.arm, field: next.field, risk: next.risk, loft: next.loft, mlb: next.id, natural: next.pos, alt: next.alt || []
+              });
+              saveTeams();
+              renderTeams();
+              return;
+            }
+          }
+          const blank = { name: "New player", pos: "DH", bats: "R", contact: 50, power: 50, eye: 50, speed: 50, arm: 50, field: 50, risk: 50 };
+          team.bench.push(blank);
+          openEditor(blank, false, () => { saveTeams(); renderTeams(); }, true);
           renderTeams();
         });
         card.append(benchTitle, bench, addBench);
 
         const pitchers = document.createElement("table");
+        pitchers.className = "roster";
         pitchers.style.marginTop = "12px";
         const ph = pitchers.createTHead().insertRow();
-        ["Pitcher", "Role", "Throws", "VELO", "CTL", "MOV", "STA", "OVR", ""].forEach((text) => { ph.insertCell().outerHTML = `<th>${text}</th>`; });
+        ["Pitcher", "Role", "OVR", ""].forEach((text) => { ph.insertCell().outerHTML = `<th>${text}</th>`; });
         const pb = pitchers.createTBody();
         team.pitchers.forEach((player, index) => {
-          const row = pb.insertRow();
-          cell(row, textInput(player, "name"));
+          const row = rosterRow(pb, player, true, renderTeams);
+          row.insertCell().textContent = player.name;
           row.insertCell().textContent = index === 0 ? "SP" : "RP";
-          cell(row, selectInput(player, "throws", ["R", "L"]));
-          cell(row, numInput(player, "velo"));
-          for (const key of ["control", "movement", "stamina"]) cell(row, numInput(player, key));
           const ovr = row.insertCell();
           ovr.dataset.ovr = `${ti}:p:${index}`;
           ovr.style.fontWeight = "700";
@@ -934,26 +1237,67 @@
       updateRatings();
     }
     renderTeams();
+    teams.forEach((t) => { if (t.year && t.year !== latestYear) loadSeason(t.year, (ok) => { if (ok) renderTeams(); else delete t.year; }); });
+
+    /* ------------------------------------------------------------ league game */
+
+    const LEAGUE_PENDING = "field-notes-league-pending-v1";
+    const LEAGUE_RESULT = "field-notes-league-result-v1";
+    let leagueGame = null;
+    let leagueDone = false;
+    if (new URLSearchParams(location.search).get("league")) {
+      try { leagueGame = JSON.parse(localStorage.getItem(LEAGUE_PENDING)); } catch (error) { leagueGame = null; }
+    }
+    if (leagueGame && leagueGame.config) {
+      $("teams").classList.add("hidden");
+      $("park").value = leagueGame.config.park;
+      $("innings").value = leagueGame.config.innings;
+      ["park", "innings", "seed"].forEach((id) => { $(id).disabled = true; });
+      document.querySelectorAll("#wx-row input, #wx-row select").forEach((el) => { el.disabled = true; });
+      if (leagueGame.my != null) {
+        $(`ctl-${leagueGame.my}`).value = "timing";
+        $(`pctl-${leagueGame.my}`).value = "player";
+      }
+      const note = document.createElement("div");
+      note.className = "card";
+      note.innerHTML = `<h2 style="margin:0 0 6px">League game: ${leagueGame.label.replace(/[<>&]/g, "")}</h2><div class="muted">Teams, ballpark, weather and innings come from the league. Pick how each side is controlled, then play ball. The result is sent back to the league when the game ends.</div><div style="margin-top:8px"><a href="league.html">&larr; Back to the league without playing</a></div>`;
+      $("setup").prepend(note);
+    }
+    function reportLeague() {
+      if (!leagueGame || leagueDone || !window.LeagueEngine) return;
+      try {
+        localStorage.setItem(LEAGUE_RESULT, JSON.stringify({ leagueId: leagueGame.leagueId, refId: leagueGame.refId, ex: window.LeagueEngine.extract(game) }));
+        leagueDone = true;
+        $("btn-league").classList.remove("hidden");
+        $("btn-league").textContent = "Return to league (result saved)";
+      } catch (error) { /* ignore */ }
+    }
+    $("btn-league").addEventListener("click", () => { location.href = "league.html"; });
 
     /* ------------------------------------------------------------ game flow */
 
     $("start").addEventListener("click", () => {
       const seedValue = $("seed").value.trim();
       try {
+        const away = leagueGame ? leagueGame.config.away : JSON.parse(JSON.stringify(teams[0]));
+        const home = leagueGame ? leagueGame.config.home : JSON.parse(JSON.stringify(teams[1]));
         game = E.createGame({
-          away: JSON.parse(JSON.stringify(teams[0])),
-          home: JSON.parse(JSON.stringify(teams[1])),
-          park: $("park").value,
-          innings: Math.max(1, Math.floor(Number($("innings").value) || 9)),
-          weather: {
+          away,
+          home,
+          park: leagueGame ? leagueGame.config.park : $("park").value,
+          innings: leagueGame ? leagueGame.config.innings : Math.max(1, Math.floor(Number($("innings").value) || 9)),
+          ghost: leagueGame ? leagueGame.config.ghost : undefined,
+          weather: leagueGame ? leagueGame.config.weather : {
             mode: $("wx-mode").value,
             variation: $("wx-var").value,
             speed: Number($("wx-speed").value) || 0,
             from: readFrom(),
             altitude: $("wx-alt").value.trim() === "" ? null : Number($("wx-alt").value),
+            tempMode: $("tp-mode").value,
+            temp: $("tp-temp").value.trim() === "" ? null : Number($("tp-temp").value),
             roof: $("wx-roof").value
           },
-          seed: seedValue === "" ? Math.floor(Math.random() * 1e9) : Number(seedValue),
+          seed: leagueGame ? leagueGame.config.seed : seedValue === "" ? Math.floor(Math.random() * 1e9) : Number(seedValue),
           coach: [$("coach-0").value, $("coach-1").value]
         });
       } catch (error) {
@@ -961,7 +1305,10 @@
         return;
       }
       $("errors").textContent = "";
-      game.teams.forEach((t, i) => { t.abbr = teamAbbr(teams[i]); t.color = teams[i].color || DEFAULT_COLORS[i]; });
+      game.teams.forEach((t, i) => {
+        t.abbr = leagueGame ? leagueGame.abbrs[i] : teamAbbr(teams[i]);
+        t.color = leagueGame ? leagueGame.colors[i] : (teams[i].color || DEFAULT_COLORS[i]);
+      });
       controls = [$("ctl-0").value, $("ctl-1").value];
       pitchControls = [$("pctl-0").value, $("pctl-1").value];
       fieldControls = [$("fctl-0").value, $("fctl-1").value];
@@ -987,9 +1334,13 @@
     });
 
     $("btn-new").addEventListener("click", () => {
+      if (leagueGame && leagueDone) { location.href = "league.html"; return; }
       stopAnim();
       clipSeq += 1;
+      clipView = null;
       clearTimeout(revealTimer);
+      clearTimeout(autoTimer);
+      autoPaused = false;
       clearTimeout(hrTimer);
       flight = null;
       holdView = false;
@@ -1047,33 +1398,35 @@
     // Plays back every plate appearance of a multi-at-bat sim in order: balls in play on the field,
     // strikeouts and walks as the final pitch plus a call banner.
     let clipSeq = 0;
-    function playClips(clips) {
+    function playClips(clips, startView) {
       clearTimeout(revealTimer);
       if (!clips.length) return revealAfter(null);
       const seq = ++clipSeq;
       holdView = true;
+      clipView = startView || null;
       $("btn-skip").classList.remove("hidden");
       refresh();
       let i = 0;
       const next = () => {
         if (seq !== clipSeq) return;
         if (i >= clips.length) return endClips();
+        if (i > 0 && clips[i - 1].view) { clipView = clips[i - 1].view; refresh(); }
         const clip = clips[i];
         i += 1;
         clearTimeout(resultTimer);
         $("pitch-result").textContent = "";
         if (clip.saved) {
-          showOverlay(false);
+          clearZoneNow();
           const ms = playBall(clip.saved.ball, clip.saved.play, clip.saved.snap, clip.saved.pitch);
           hrPopup(clip.saved);
           revealTimer = setTimeout(next, ms);
           return;
         }
         const event = clip.event;
-        showOverlay(false);
+        clearZoneNow();
         $("banner").innerHTML = "&nbsp;";
         if (clip.foul) {
-          playFoul(event.foul, clip.rec);
+          playFoul(event.foul, clip.rec, event, true);
           revealTimer = setTimeout(next, (preRoll(event.pitch) + event.foul.pts[event.foul.pts.length - 1].t + 0.8) * 1000);
           return;
         }
@@ -1104,6 +1457,7 @@
       showOverlay(false);
       $("btn-skip").classList.add("hidden");
       holdView = false;
+      clipView = null;
       if (pendingBanner) $("banner").textContent = pendingBanner;
       pendingBanner = "";
       refresh();
@@ -1397,6 +1751,7 @@
       let lastSaved = null;
       const clips = [];
       const every = forceEvery || $("watch-mode").value === "every";
+      const startView = captureView();
       let first = true;
       while (!game.over && guard < 20000) {
         // With a manual coach, stop between batters so substitutions can be made.
@@ -1405,6 +1760,7 @@
         const rec = beginRec(E.nextPitch(game));
         const event = E.stepPitch(game, undefined, { human: humanFlags() });
         guard += 1;
+        const clipCount = clips.length;
         if (event && event.ball) {
           lastEvent = event;
           lastSaved = record(event, rec);
@@ -1414,18 +1770,28 @@
         } else if (event && event.pitch && event.call && (every || (event.pa && (event.pa.result.kind === "k" || event.pa.result.kind === "bb")))) {
           clips.push({ rec, event, pitch: true });
         }
+        if (clips.length > clipCount) clips[clips.length - 1].view = captureView();
         if (done(event)) break;
       }
       phase = "ready";
       timing = null;
       if (lastSaved) lastBall = lastSaved;
-      playClips(clips);
+      playClips(clips, startView);
     }
 
     /* ------------------------------------------------------------ pitching */
 
     const pitchMode = () => pitchControls[1 - game.half];
     const showOverlay = (on) => $("zone-overlay").classList.toggle("on", on);
+    function clearZoneNow() {
+      const box = $("zone-overlay");
+      clearTimeout(resultTimer);
+      $("pitch-result").textContent = "";
+      box.style.transition = "none";
+      box.classList.remove("on");
+      void box.offsetWidth;
+      box.style.transition = "";
+    }
     const showAimUI = (on) => $("aim-ui").classList.toggle("hidden", !on);
 
     function startAim(pm) {
@@ -1519,6 +1885,8 @@
 
     $("btn-pitch").addEventListener("click", () => {
       if (!game || game.over || phase !== "ready" || holdView) return;
+      clearTimeout(autoTimer);
+      autoPaused = false;
       clearTimeout(resultTimer);
       $("pitch-result").textContent = "";
       feedback = null;
@@ -1574,7 +1942,7 @@
     }
 
     // Keep the pitch screen up briefly and show the call in big letters.
-    function showPitchResult(event) {
+    function showPitchResult(event, auto) {
       const text = callText(event);
       clearTimeout(resultTimer);
       const el = $("pitch-result");
@@ -1582,19 +1950,49 @@
       el.textContent = text;
       const kind = event.pa && event.pa.result.kind;
       el.dataset.kind = kind === "bb" || (!kind && event.call === "ball") ? "b" : event.call === "foul" ? "f" : "s";
-      resultTimer = setTimeout(() => { el.textContent = ""; if (phase === "ready") showOverlay(false); }, kind === "k" || kind === "bb" ? 2200 : 1600);
+      resultTimer = setTimeout(() => { el.textContent = ""; if (phase === "ready" && !auto) showOverlay(false); }, auto ? 1000 : kind === "k" || kind === "bb" ? 2200 : 1600);
       return true;
     }
 
+    // Manual batting against a simulated pitcher keeps the pitches coming until the ball is put in play.
+    let autoTimer = null;
+    let autoPaused = false;
+    const autoOK = (event) => !!(event && !event.pa && !event.live && !event.ball && !autoPaused && game && !game.over && human() && pitchMode() === "sim");
+    function scheduleAuto(ms) {
+      clearTimeout(autoTimer);
+      autoTimer = setTimeout(() => {
+        if (!game || game.over || autoPaused || phase !== "ready" || holdView || !human() || pitchMode() !== "sim") return;
+        $("btn-pitch").click();
+      }, ms);
+    }
+    $("btn-autopause").addEventListener("click", () => { autoPaused = true; clearTimeout(autoTimer); refresh(); });
+
     function settle(event, rec) {
-      const keep = !(event && event.live) && showPitchResult(event);
-      if (!keep) { $("pitch-result").textContent = ""; showOverlay(false); }
+      const foul = !!(event && event.foul);
+      const auto = autoOK(event);
+      const keep = !(event && event.live) && !foul && showPitchResult(event, auto);
+      if (!keep) { $("pitch-result").textContent = ""; if (!auto || foul) showOverlay(false); }
       phase = "ready";
       if (lastZone) lastZone = { ...lastZone, live: false };
       pendingRec = null;
       if (event && event.live) return startLive(event, rec);
-      if (event && event.foul) playFoul(event.foul, rec);
+      if (foul) return holdFoul(event, rec, auto);
       finishStep(event, rec);
+      if (auto) scheduleAuto(1300);
+    }
+
+    // The batter doesn't learn fair/foul/caught until the ball has finished flying.
+    function holdFoul(event, rec, auto) {
+      timing = null;
+      clearTimeout(revealTimer);
+      holdView = true;
+      const ms = playFoul(event.foul, rec, event, false);
+      refresh();
+      revealTimer = setTimeout(() => {
+        holdView = false;
+        refresh();
+        if (auto) { showOverlay(true); scheduleAuto(700); }
+      }, ms);
     }
 
     // Smart fielder movement for a simulated play: every fielder's position over time.
@@ -1607,23 +2005,31 @@
       });
     }
 
-    function playFoul(flight, rec) {
+    function playFoul(flight, rec, event, always) {
+      clearZoneNow();
       sendScene(rec && rec.snap);
+      const catchInfo = event && event.foulCatch;
       const points = flight.pts.map((p) => ({ t: p.t, x: p.x, y: p.y, z: p.z }));
+      if (catchInfo) points.push({ t: catchInfo.t, x: catchInfo.x, y: catchInfo.y, z: 3 });
       const end = points.length ? points[points.length - 1].t : 3;
+      const near = event && typeof event.foulEdge === "number" && event.foulEdge <= 3;
+      const label = catchInfo ? "Out" : always || near ? "Foul" : undefined;
+      const spot = catchInfo ? { x: catchInfo.x, y: catchInfo.y } : flight.landing ? { x: flight.landing.x, y: flight.landing.y } : undefined;
       post({
         type: "gm-play",
         points,
-        color: "#9aa59d",
-        label: "Foul",
-        landing: flight.landing ? { x: flight.landing.x, y: flight.landing.y } : undefined,
-        fielder: null,
+        color: catchInfo ? "#758079" : "#9aa59d",
+        label,
+        landing: spot,
+        fielder: catchInfo ? { pos: catchInfo.pos, x: catchInfo.x, y: catchInfo.y, t: catchInfo.t } : null,
         throws: [],
         runners: [],
-        tracks: buildTracks(rec && rec.snap, points, flight.landing, null, [], [], end + 1.5),
+        tracks: buildTracks(rec && rec.snap, points, spot, catchInfo ? { pos: catchInfo.pos, x: catchInfo.x, y: catchInfo.y, t: catchInfo.t } : null, [], [], end + 1.5),
         lead: preRoll(rec && rec.pitch)
       });
+      return (preRoll(rec && rec.pitch) + end + 1.2) * 1000;
     }
+
     $("btn-take").addEventListener("click", () => phase === "await" && resolveManual({ swing: false }));
     $("btn-whiff").addEventListener("click", () => phase === "await" && resolveManual({ swing: true, timing: 400, loc: 10 }));
     $("btn-simswing").addEventListener("click", () => phase === "await" && resolveManual(undefined));
@@ -1944,10 +2350,11 @@
     function stopAnim() {}
 
     function playBall(ball, play, snap, pitch, isReplay) {
+      clearZoneNow();
       clearTimeout(sceneTimer);
       snap = snap || takeSnap();
       const spot = play && play.spot ? play.spot : null;
-      const distance = Math.round(ball.hr ? (ball.hrDistance || ball.landing.d) : spot ? Math.hypot(spot.x, spot.y) : ball.landing.d);
+      const distance = Math.round(play && !ball.hr ? E.hitDistance(ball, play) : ball.hr ? (ball.hrDistance || ball.landing.d) : ball.landing.d);
       let result = "out";
       if (ball.hr) result = "home run";
       else if (play && play.kind === "hit") result = ["out", "single", "double", "triple", "home run"][play.hitBases] || "single";
@@ -1976,9 +2383,16 @@
         fielded ? { pos: play.fielder.pos, x: spot.x, y: spot.y, t: Math.max(0.5, play.time || 2) } : null,
         throwList, runners.map((r) => ({ from: r.from, to: r.to, delay: r.delay, perBase: r.perBase })),
         Math.max(tFlightEnd, tRunEnd, ...throwList.map((th) => th.arrive)) + 2.4);
+      // On a fielded ground ball, hold the result until the batter's fate is settled.
+      let revealAt = null;
+      if (fielded && !play.air) {
+        const batter = runners.find((r) => r.from === 0);
+        revealAt = Math.max(tFlightEnd, ...throwList.map((th) => th.arrive), batter ? batter.delay + batter.perBase * (batter.to - batter.from) : 0);
+      }
       post({
         type: "gm-play",
         points,
+        revealAt,
         color: RESULT_COLOR[result],
         label,
         landing: fielded ? { x: spot.x, y: spot.y } : ball.landing ? { x: ball.landing.x, y: ball.landing.y } : undefined,
@@ -2007,7 +2421,7 @@
 
     const resultLabel = (ball, play) => {
       const spot = play && play.spot ? play.spot : null;
-      const distance = Math.round(spot ? Math.hypot(spot.x, spot.y) : ball.landing.d);
+      const distance = Math.round(play ? E.hitDistance(ball, play) : ball.landing.d);
       let result = "out";
       if (play && play.kind === "hit") result = ["out", "single", "double", "triple", "home run"][play.hitBases] || "single";
       return {
@@ -2018,6 +2432,7 @@
     };
 
     function startLive(event, rec) {
+      clearZoneNow();
       clearTimeout(sceneTimer);
       phase = "live";
       liveAdd = 0;
@@ -2164,6 +2579,7 @@
     let liveAdd = 0;
 
     function renderBug(snap) {
+      const game = viewGame();
       const team = (i) => {
         const col = game.teams[i].color || DEFAULT_COLORS[i];
         const batting = !game.over && game.half === i;
@@ -2180,18 +2596,39 @@
       const wxv = game.env ? E.windNow(game, true) : { x: 0, y: 0 };
       const wxSpeed = Math.round(Math.hypot(wxv.x, wxv.y));
       const wxArrow = wxSpeed < 1 ? "" : `<svg width="12" height="12" viewBox="-6 -6 12 12" style="vertical-align:-2px;margin-right:3px"><path d="M0 5 L0 -5 M-3 -2 L0 -5 L3 -2" stroke="#f2c14e" stroke-width="1.6" fill="none" transform="rotate(${Math.round(Math.atan2(wxv.x, wxv.y) * 180 / Math.PI)})"/></svg>`;
-      const wxText = game.over || !game.env ? "" : `<div class="b-wx" style="font-size:10px;opacity:.85;margin-top:3px">${wxSpeed < 1 ? "Wind calm" : `${wxArrow}${wxSpeed} mph ${E.windText(wxv)}`}</div>`;
+      const wxText = game.over || !game.env ? "" : `<div class="b-wx" style="font-size:10px;opacity:.85;margin-top:3px">${wxSpeed < 1 ? "Wind calm" : `${wxArrow}${wxSpeed} mph ${E.windText(wxv)}`} · ${Math.round(game.env.temp)}°F</div>`;
       $("bug").innerHTML = `<div class="b-teams">${team(0)}${team(1)}</div>` +
         `<div class="b-mid"><span class="b-inn">${inn}</span>${game.over ? "" : dia + `<div style="display:flex;gap:8px;align-items:center;font-size:11px">${snap.count.balls}-${snap.count.strikes}${dots(snap.outs, 3)}</div>`}</div>` +
         (game.over ? "" : `<div class="b-who"><span><b>AB</b>${esc(snap.batter.name)} <i style="opacity:.7;font-style:normal">${bs.h}-${bs.ab}</i></span><span><b>P</b>${esc(snap.pitcher.name)} <i style="opacity:.7;font-style:normal">${ps.pc}P</i></span>${wxText}</div>`);
     }
 
+    let clipView = null;
+    function viewGame() {
+      if (!clipView) return game;
+      const v = Object.create(game);
+      Object.assign(v, clipView.g);
+      v.log = game.log.slice(0, clipView.g.logLen);
+      return v;
+    }
+    function captureView() {
+      return {
+        snap: E.snapshot(game),
+        g: {
+          score: [...game.score], hits: [...game.hits], errors: [...game.errors],
+          lineScore: game.lineScore.map((l) => l.slice()), bases: game.bases.slice(),
+          half: game.half, inning: game.inning, over: game.over, logLen: game.log.length
+        }
+      };
+    }
+
     function refresh() {
-      const snap = E.snapshot(game);
+      const curSnap = E.snapshot(game);
       const isHuman = human();
       const awaiting = phase === "await";
       const busy = phase !== "ready" || holdView;
-      if (!holdView) {
+      if (!holdView || clipView) {
+      const game = viewGame();
+      const snap = clipView ? clipView.snap : curSnap;
       renderBug(snap);
       dots("dots-b", snap.count.balls, 3, "b");
       dots("dots-s", snap.count.strikes, 2, "s");
@@ -2225,6 +2662,7 @@
       const pm = game.over ? "sim" : pitchMode();
       $("btn-pitch").textContent = pm !== "sim" ? "Pitch" : isHuman ? (mode() === "timing" ? "Next pitch (then swing)" : "Next pitch") : "Next pitch";
       for (const id of ["btn-pa", "btn-half", "btn-game"]) $(id).disabled = game.over || busy;
+      $("btn-autopause").classList.toggle("hidden", game.over || !isHuman || pm !== "sim" || autoPaused);
       $("evla").classList.toggle("hidden", !(isHuman && mode() === "evla"));
       renderSteal();
       renderChal();
@@ -2250,6 +2688,7 @@
     }
 
     function renderLog() {
+      const game = viewGame();
       const sections = [];
       game.log.forEach((entry, index) => {
         if (entry.kind === "header" || !sections.length) sections.push({ title: entry.kind === "header" ? entry.text.replace(/ - .*$/, "") : "Start", items: [] });
@@ -2329,6 +2768,7 @@
     function archiveGame() {
       if (!game || !game.over || game.archived) return;
       game.archived = true;
+      reportLeague();
       const entry = {
         id: Date.now() + "-" + Math.floor(Math.random() * 1e5),
         date: new Date().toISOString(),

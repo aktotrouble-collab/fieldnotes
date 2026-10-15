@@ -72,25 +72,29 @@ async function savant(year, type, selections, min) {
   return parseCsv(await get(url));
 }
 
-async function bios(ids, year) {
+// historical: use the team a player spent the most games with that season instead of his current team.
+async function bios(ids, year, historical) {
   const out = new Map();
   for (let i = 0; i < ids.length; i += 100) {
     const chunk = ids.slice(i, i + 100);
-    const json = JSON.parse(await get(`https://statsapi.mlb.com/api/v1/people?personIds=${chunk.join(',')}&hydrate=currentTeam,stats(group=[fielding],type=[season],season=${year})`));
+    const json = JSON.parse(await get(`https://statsapi.mlb.com/api/v1/people?personIds=${chunk.join(',')}&hydrate=currentTeam,stats(group=[fielding,hitting,pitching],type=[season],season=${year})`));
     for (const p of json.people || []) {
       // Games played at each fielding position this season; used for multi-position eligibility.
       const games = {};
+      const byTeam = {};
       for (const group of p.stats || []) {
         for (const split of group.splits || []) {
           const abbr = split.position && split.position.abbreviation;
           if (abbr && abbr !== 'P' && abbr !== 'DH') games[abbr] = (games[abbr] || 0) + (split.stat.gamesPlayed || 0);
+          if (split.team && split.team.id) byTeam[split.team.id] = (byTeam[split.team.id] || 0) + (split.stat.gamesPlayed || 0);
         }
       }
+      const seasonTeam = Object.entries(byTeam).sort((a, b) => b[1] - a[1])[0];
       out.set(String(p.id), {
         bats: p.batSide && p.batSide.code, throws: p.pitchHand && p.pitchHand.code,
         pos: p.primaryPosition && p.primaryPosition.abbreviation,
-        team: p.currentTeam && (p.currentTeam.abbreviation || p.currentTeam.name),
-        teamId: p.currentTeam && p.currentTeam.id,
+        team: historical ? '' : p.currentTeam && (p.currentTeam.abbreviation || p.currentTeam.name),
+        teamId: historical ? (seasonTeam ? Number(seasonTeam[0]) : null) : p.currentTeam && p.currentTeam.id,
         games
       });
     }
@@ -98,27 +102,38 @@ async function bios(ids, year) {
   return out;
 }
 
-async function teamAbbr() {
-  const json = JSON.parse(await get('https://statsapi.mlb.com/api/v1/teams?sportId=1'));
+async function teamAbbr(year, historical) {
+  const json = JSON.parse(await get(`https://statsapi.mlb.com/api/v1/teams?sportId=1${historical ? `&season=${year}` : ''}`));
   return new Map(json.teams.map((t) => [t.id, t.abbreviation]));
 }
 
-async function main() {
-  const year = Number(process.argv[2]) || new Date().getFullYear();
+const FIRST_YEAR = 2015;
+const FIRST_ARM_YEAR = 2020;
+
+async function build(year, historical) {
   const BAT = ['pa', 'k_percent', 'bb_percent', 'batting_avg', 'on_base_percent', 'slg_percent', 'exit_velocity_avg', 'launch_angle_avg',
     'barrel_batted_rate', 'hard_hit_percent', 'sprint_speed', 'oz_swing_percent', 'swing_percent', 'iz_contact_percent', 'avg_swing_speed', 'home_run'];
   const PIT = ['p_game', 'p_formatted_ip', 'p_starts', 'k_percent', 'bb_percent', 'ff_avg_speed', 'sl_avg_speed', 'whiff_percent', 'oz_swing_percent', 'p_era', 'groundballs_percent'];
 
   let useYear = year;
   let batRows = await savant(useYear, 'batter', BAT, 25);
-  if (batRows.length < 100) { useYear -= 1; batRows = await savant(useYear, 'batter', BAT, 25); }
+  if (!historical && batRows.length < 100) { useYear -= 1; batRows = await savant(useYear, 'batter', BAT, 25); }
   const pitRows = await savant(useYear, 'pitcher', PIT, 5);
-  const armRows = parseCsv(await get(`${SAVANT}/leaderboard/arm-strength?type=player&year=${useYear}&minThrows=10&pos=&team=&csv=true`));
-  const oaaRows = parseCsv(await get(`${SAVANT}/leaderboard/outs_above_average?type=Fielder&startYear=${useYear}&endYear=${useYear}&split=no&team=&range=year&min=10&pos=&roles=&viz=hide&csv=true`));
-  console.log(`season ${useYear}: ${batRows.length} batters, ${pitRows.length} pitchers, ${armRows.length} arm rows, ${oaaRows.length} OAA rows`);
+  const armCsv = (y) => get(`${SAVANT}/leaderboard/arm-strength?type=player&year=${y}&minThrows=10&pos=&team=&csv=true`).then(parseCsv).catch(() => []);
+  let armRows = await armCsv(useYear);
+  // Arm strength is only tracked from 2020. Earlier seasons borrow each player's arm from the first tracked season
+  // (arm strength changes slowly); players who never appear there get a position-based guess below.
+  let armYear = useYear;
+  if (armRows.length < 50) {
+    armYear = FIRST_ARM_YEAR;
+    armRows = await armCsv(armYear);
+  }
+  // Outs Above Average only exists from 2016; 2015 fielders stay at a neutral 50 FLD.
+  const oaaRows = await get(`${SAVANT}/leaderboard/outs_above_average?type=Fielder&startYear=${useYear}&endYear=${useYear}&split=no&team=&range=year&min=10&pos=&roles=&viz=hide&csv=true`).then(parseCsv).catch(() => []);
+  console.log(`season ${useYear}: ${batRows.length} batters, ${pitRows.length} pitchers, ${armRows.length} arm rows (${armYear}), ${oaaRows.length} OAA rows`);
 
   const ids = [...new Set([...batRows, ...pitRows].map((r) => r.player_id))];
-  const [bio, teams] = await Promise.all([bios(ids, useYear), teamAbbr()]);
+  const [bio, teams] = await Promise.all([bios(ids, useYear, historical), teamAbbr(useYear, historical)]);
 
   const arm = new Map(armRows.map((r) => [r.player_id, r]));
   const oaa = new Map(oaaRows.map((r) => [r.player_id, num(r.outs_above_average)]));
@@ -139,8 +154,12 @@ async function main() {
   const batters = [];
   for (const r of batRows) {
     const b = bio.get(r.player_id) || {};
+    if (b.pos === 'P') continue; // pitchers who batted (pre-2022 NL) aren't hitters
     const pa = num(r.pa);
-    const pos = b.pos && b.pos !== 'P' && b.pos !== 'TWP' ? b.pos : (b.pos === 'TWP' ? 'DH' : 'DH');
+    // Position = where he played the most games that season (current primary position only if there's little fielding data).
+    const topField = Object.entries(b.games || {}).sort((x, y) => y[1] - x[1])[0];
+    const bioPos = b.pos && b.pos !== 'P' && b.pos !== 'TWP' ? b.pos : 'DH';
+    const pos = topField && topField[1] >= 20 ? topField[0] : bioPos;
     const wBat = shrink(pa, 150);
     const sprint = num(r.sprint_speed);
     const speed = sprint === null ? 42 : rate(zSpeed(sprint));
@@ -150,7 +169,7 @@ async function main() {
     const armRow = arm.get(r.player_id);
     const group = armGroup(pos);
     const armVal = armRow ? num(armRow[group]) ?? num(armRow.arm_overall) : null;
-    const armRating = armVal === null ? (pos === 'C' ? 58 : 50) : rate(armStats[group](armVal));
+    const armRating = armVal === null ? (pos === 'C' ? 58 : ['SS', '3B', 'RF'].includes(pos) ? 52 : 50) : rate(armStats[group](armVal));
     const oaaVal = oaa.get(r.player_id);
     const field = oaaVal === null || oaaVal === undefined ? 50 : Math.max(FLOOR, Math.round(50 + 3 * oaaVal));
     const risk = Math.max(FLOOR, Math.round(50 + 0.5 * (speed - 50) + 5 * zSwing(num(r.swing_percent))));
@@ -190,10 +209,35 @@ async function main() {
 
   batters.sort((a, b) => b.pa - a.pa);
   pitchers.sort((a, b) => b.ip - a.ip);
-  const out = `/* Generated by build-players.js from Baseball Savant and the MLB Stats API (${useYear} season). Do not edit by hand. */\n`
-    + `window.MLB_PLAYERS = ${JSON.stringify({ year: useYear, built: new Date().toISOString().slice(0, 10), batters, pitchers })};\n`;
-  fs.writeFileSync(path.join(__dirname, 'players-data.js'), out);
-  console.log(`wrote players-data.js: ${batters.length} batters, ${pitchers.length} pitchers, ${(out.length / 1024).toFixed(0)} KB`);
+  const payload = JSON.stringify({ year: useYear, built: new Date().toISOString().slice(0, 10), batters, pitchers });
+  const header = `/* Generated by build-players.js from Baseball Savant and the MLB Stats API (${useYear} season). Do not edit by hand. */\n`;
+  let out, file;
+  if (historical) {
+    file = path.join('seasons', `players-${useYear}.js`);
+    out = `${header}(window.MLB_SEASONS = window.MLB_SEASONS || {})[${useYear}] = ${payload};\n`;
+    fs.mkdirSync(path.join(__dirname, 'seasons'), { recursive: true });
+  } else {
+    file = 'players-data.js';
+    out = `${header}window.MLB_PLAYERS = ${payload};\n`;
+  }
+  fs.writeFileSync(path.join(__dirname, file), out);
+  console.log(`wrote ${file}: ${batters.length} batters, ${pitchers.length} pitchers, ${(out.length / 1024).toFixed(0)} KB`);
+  return useYear;
+}
+
+/* node build-players.js            -> players-data.js for the latest season (the nightly job)
+   node build-players.js 2019       -> seasons/players-2019.js
+   node build-players.js --all      -> every past season from 2015 up to the latest, skipping files that exist */
+async function main() {
+  const arg = process.argv[2];
+  if (arg === '--all') {
+    const latest = await build(new Date().getFullYear(), false);
+    for (let y = FIRST_YEAR; y < latest; y += 1) {
+      if (fs.existsSync(path.join(__dirname, 'seasons', `players-${y}.js`))) continue;
+      await build(y, true);
+    }
+  } else if (arg) await build(Number(arg), true);
+  else await build(new Date().getFullYear(), false);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

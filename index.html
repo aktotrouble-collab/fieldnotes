@@ -248,8 +248,11 @@
       border-bottom: 1px solid #eeede5;
     }
     .compare-help { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
-    .tip { display:inline-flex; align-items:center; justify-content:center; width:15px; height:15px; margin:0 3px; border-radius:50%; border:1px solid var(--muted); color:var(--muted); font:italic 700 10px/1 Georgia,serif; cursor:help; vertical-align:middle; user-select:none; outline:none; }
-    .tip:hover, .tip:focus { background:var(--green, #29845e); border-color:var(--green, #29845e); color:#fff; }
+    .tip { display:inline-flex; align-items:center; justify-content:center; width:11px; height:11px; margin:0 2px 0 1px; opacity:.45; border-radius:50%; border:1px solid var(--muted); color:var(--muted); font:italic 700 8px/1 Georgia,serif; cursor:help; vertical-align:middle; user-select:none; outline:none; }
+    .tip:hover, .tip:focus { opacity:1; background:var(--green, #29845e); border-color:var(--green, #29845e); color:#fff; }
+    html.no-help i.tip { display:none !important; }
+    .help-toggle { display:inline-flex !important; flex-direction:row !important; align-items:center; gap:5px; white-space:nowrap; color:inherit; font-size:12px; cursor:pointer; user-select:none; }
+    .help-toggle input { margin:0; width:auto; padding:0; }
     #tip-pop { position:fixed; z-index:1000; max-width:300px; padding:8px 10px; border-radius:8px; background:rgba(14,24,20,.95); color:#fff; font-size:12px; line-height:1.4; box-shadow:0 4px 16px rgba(0,0,0,.35); pointer-events:none; display:none; }
     .compare-actions { display: flex; gap: 6px; }
     .wx-box { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--line, rgba(0,0,0,.15)); border-radius: 8px; }
@@ -566,7 +569,7 @@
     .direction-hit-button:disabled { opacity: .45; cursor: default; }
     .aim-status { margin: 8px 0 0; color: #58625a; font-size: 11px; line-height: 1.45; }
     .aim-status.ready { color: #237454; font-weight: 700; }
-    .tip {
+    .entry-note {
       display: flex;
       gap: 8px;
       align-items: flex-start;
@@ -578,7 +581,7 @@
       font-size: 11px;
       line-height: 1.45;
     }
-    .tip svg { flex: none; width: 14px; height: 14px; margin-top: 1px; }
+    .entry-note svg { flex: none; width: 14px; height: 14px; margin-top: 1px; }
 
     .log-card { overflow: hidden; }
     .log-heading {
@@ -728,9 +731,18 @@
 </head>
 <body>
   <script>{ const q = new URLSearchParams(location.search); if (q.get("embed") === "1") document.body.classList.add("embed"); if (q.get("game") === "1") document.body.classList.add("game"); }</script>
+  <script>if (localStorage.getItem("field-notes-help-v1") === "off") document.documentElement.classList.add("no-help");</script>
   <div id="tip-pop" role="tooltip"></div>
   <script>
     (() => {
+      const toggle = document.getElementById("help-toggle");
+      if (toggle) {
+        toggle.checked = !document.documentElement.classList.contains("no-help");
+        toggle.addEventListener("change", () => {
+          document.documentElement.classList.toggle("no-help", !toggle.checked);
+          try { localStorage.setItem("field-notes-help-v1", toggle.checked ? "on" : "off"); } catch (error) { /* ignore */ }
+        });
+      }
       const pop = document.getElementById("tip-pop");
       const show = (el) => {
         pop.textContent = el.dataset.tip;
@@ -763,7 +775,9 @@
         </div>
       </div>
       <div class="top-actions">
+        <label class="help-toggle" title="Show or hide the small i hints next to settings"><input type="checkbox" id="help-toggle"> Show hints</label>
         <a class="button keep-label" href="game.html" title="Play a simulated game"><span class="button-label">Game mode</span></a>
+        <a class="button keep-label" href="league.html" title="Run a full season with standings and stats"><span class="button-label">League mode</span></a>
         <button class="button" id="export-button" type="button" title="Download entries as CSV">
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 16v4h14v-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <span class="button-label">Export CSV</span>
@@ -981,7 +995,7 @@
             </div>
             <button class="button hit-button direction-hit-button" id="direction-hit-button" type="button" disabled>Hit using direction</button>
           </form>
-          <div class="tip">
+          <div class="entry-note">
             <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="10" cy="10" r="7.5" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v4m0-6h.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
             <span id="entry-tip">Click the field to choose a direction, or enter degrees (0° = CF, negative = LF, positive = RF) and press Hit using direction. With Result on Auto, the sim decides the outcome from your stats (home run if it clears the fence, otherwise a fielding model). Remove an entry from the log if you place it by mistake.</span>
           </div>
@@ -2301,6 +2315,13 @@
       let aim = null;
       let fielded = null;
       const selectedIds = new Set();
+      // Only selected balls are charted. Every ball is selected the first time it is seen, so new ones show up automatically.
+      const seenIds = new Set();
+      function syncSelection() {
+        for (const entry of entries) {
+          if (!seenIds.has(entry.id)) { seenIds.add(entry.id); selectedIds.add(entry.id); }
+        }
+      }
       const WALL_HEIGHT = 8;
 
       // Outer edge of the foul-territory warning track as image pixels, from the left foul pole behind home to the right foul pole.
@@ -2962,6 +2983,8 @@
 
       // Angle in degrees of the park's own foul line (from the traced wall ends), or 45 when there is no art.
       function foulLineAngle(parkId, side) {
+        const angles = POLE_ANGLES[parkId];
+        if (angles) return Math.abs(angles[side < 0 ? 0 : 1]);
         const reference = referenceArtFor(parkId);
         if (!reference || !reference.walls) return 45;
         const [px, py] = side < 0 ? reference.walls[0] : reference.walls[reference.walls.length - 1];
@@ -3030,7 +3053,8 @@
       }
 
       function drawFlights(width, height) {
-        const entriesToDraw = activeEntries();
+        syncSelection();
+        const entriesToDraw = activeEntries().filter((entry) => selectedIds.has(entry.id) || (flight && flight.ids.has(entry.id)));
         const trace = (points, last, color, alpha, lineWidth) => {
           context.beginPath();
           let pen = false;
@@ -3052,7 +3076,7 @@
           context.globalAlpha = 1;
         };
         const playing = (entry) => flight && flight.ids.has(entry.id);
-        const anySelected = selectedIds.size > 0;
+        const anySelected = false;
         for (const entry of entriesToDraw) {
           if (playing(entry)) continue;
           const { points } = buildTrajectory(entry);
@@ -3132,11 +3156,15 @@
         }
       }
 
-      // True when an opaque outfield wall sits between the camera and the point (orthographic line of sight).
+      // True when an opaque wall (outfield fence or foul-territory wall) sits between the camera and the point (orthographic line of sight).
       function fenceHides(point) {
         const park = selectedPark();
         const fence = fenceFor(park.id);
-        const pts = fence.points;
+        const foul = foulPolyline(park.id);
+        return wallBlocks(point, fence.points, fence.heights) || (foul ? wallBlocks(point, foul, null) : false);
+      }
+
+      function wallBlocks(point, pts, heights) {
         const z0 = point.z || 0;
         const sinE = Math.sin(camera.elevation);
         const cosE = Math.cos(camera.elevation);
@@ -3153,7 +3181,7 @@
           const u = ((a.x - point.x) * dy - (a.y - point.y) * dx) / den;
           if (t <= 0 || u < 0 || u > 1) continue;
           const zAt = z0 + cosE * t;
-          const top = fence.heights[i] ?? 8;
+          const top = heights ? heights[i] ?? 8 : FOUL_WALL_HEIGHT;
           if (zAt < top - 0.05) return true;
         }
         return false;
@@ -3375,7 +3403,7 @@
 
         drawOverlayFences(width, height);
         for (const side of [-45, 45]) {
-          const base = foulPolePoint(park, side);
+          const base = foulPolePoint(park, Math.sign(side));
           drawWorldLine([{ x: base.x, y: base.y, z: 0 }, { x: base.x, y: base.y, z: 70 }], "#f2c14e", 3, width, height);
         }
         drawFlights(width, height);
@@ -3757,7 +3785,8 @@
           let index = 0;
           while (index < last && flying[index].t < elapsed) index += 1;
           const tip = flying[index];
-          if (elapsed >= flying[last].t && play.label) {
+          const revealT = typeof play.revealAt === "number" ? play.revealAt : flying[last].t;
+          if (elapsed >= revealT && play.label) {
             const spot = worldToScreen({ x: play.landing.x, y: play.landing.y, z: 0 }, width, height);
             context.font = "700 13px system-ui, sans-serif";
             context.textAlign = "center";
@@ -3791,7 +3820,7 @@
             context.globalAlpha = 1;
           };
           trace((p) => ({ x: p.x, y: p.y, z: 0 }), "#1c2a21", 0.16, 2);
-          trace((p) => p, elapsed >= flying[last].t ? play.color : "#3a4a40", 1, 1.6);
+          trace((p) => p, elapsed >= revealT ? play.color : "#3a4a40", 1, 1.6);
           const ballPoint = (() => {
             const inHand = { x: tip.x, y: tip.y, z: Math.max(tip.z, 3) };
             if (elapsed <= flying[last].t) return tip;
@@ -3835,6 +3864,7 @@
           }
           const ball = worldToScreen(ballPoint, width, height);
           const shadow = worldToScreen({ x: ballPoint.x, y: ballPoint.y, z: 0 }, width, height);
+          if (!fenceHides(ballPoint)) {
           context.fillStyle = "rgba(20, 30, 24, .28)";
           context.beginPath();
           context.ellipse(shadow.x, shadow.y, 1.5, 0.75, 0, 0, Math.PI * 2);
@@ -3846,6 +3876,7 @@
           context.lineWidth = 0.8;
           context.strokeStyle = "#2b3a31";
           context.stroke();
+          }
         } else {
           scene.runners.forEach((runner) => drawGameActor(GAME_BASES[runner.base], "#d27637", runner.name, width, height, true));
           if (scene.batter) drawGameActor({ x: -3.2, y: 0 }, "#6b5a8c", scene.batter.name, width, height, true);
@@ -3947,14 +3978,19 @@
         return referenceImages[reference.image];
       }
 
-      // The pole stands just outside the fence at the end of the drawn foul line (first/last wall point).
+      // Foul-pole bearings (left, right), measured from the white foul lines painted in each park's art.
+      const POLE_ANGLES = {"angels":[-43.7,45.5],"brewers":[-43.9,43.9],"cardinals":[-44.3,44.6],"braves":[-44.7,44.1],"yankees":[-44.1,44.1],"cubs":[-45.3,44.7],"mariners":[-45.5,43.6],"rays":[-45,44.2],"twins":[-43,44.1],"athletics":[-44,44],"blue-jays":[-41,41.2],"white-sox":[-43.5,43.9],"guardians":[-42.9,43],"pirates":[-41.5,43.9],"padres":[-44.3,43.1],"giants":[-45.3,45.4],"nationals":[-44.5,44.5],"marlins":[-44,43.8],"royals":[-44.3,44.4],"reds":[-44,45.4],"rangers":[-43.3,46],"red-sox":[-43.5,44.9],"dodgers":[-43,43.3],"astros":[-45.7,49.3],"rockies":[-44.5,44.3],"tigers":[-44.3,44],"phillies":[-43.9,43.8],"mets":[-45.3,45.3],"diamondbacks":[-43.6,43.6],"orioles":[-42.8,43.8]};
+
+      // The pole stands just outside the fence, on the painted foul line.
       function foulPolePoint(park, side) {
         const reference = referenceArtFor(park.id);
-        if (!reference) return worldPointAtFence(park, side, 1.5);
+        const angles = POLE_ANGLES[park.id];
+        if (!reference || !angles) return worldPointAtFence(park, side * 45, 1.5);
         const [px, py] = side < 0 ? reference.walls[0] : reference.walls[reference.walls.length - 1];
         const end = referencePixelToWorld(px, py, reference);
-        const r = Math.hypot(end.x, end.y) || 1;
-        return { x: end.x * (1 + 1.5 / r), y: end.y * (1 + 1.5 / r) };
+        const r = (Math.hypot(end.x, end.y) || 1) + 1.5;
+        const radians = angles[side < 0 ? 0 : 1] * Math.PI / 180;
+        return { x: Math.sin(radians) * r, y: Math.cos(radians) * r };
       }
 
       function drawReferenceWalls(reference, width, height) {
@@ -4039,6 +4075,7 @@
 
       function render() {
         const parkEntries = activeEntries();
+        syncSelection();
         renderPark();
         syncCompareOptions();
         renderOverlayFences();
@@ -4055,6 +4092,8 @@
           }, markerLayer);
           group.dataset.x = x;
           group.dataset.y = y;
+          group.dataset.entry = entry.id;
+          group.style.display = selectedIds.has(entry.id) ? "" : "none";
           addSvgElement("circle", { cx: 0, cy: 0, r: 5, fill: meta.color }, group);
           const showTip = (event) => {
             const box = group.getBoundingClientRect();
@@ -4075,7 +4114,7 @@
           parkEntries.filter((entry) => entry.result === "home run").length;
         document.getElementById("entry-count").textContent = parkEntries.length;
         for (const id of [...selectedIds]) {
-          if (!parkEntries.some((entry) => entry.id === id)) selectedIds.delete(id);
+          if (!entries.some((entry) => entry.id === id)) selectedIds.delete(id);
         }
         document.getElementById("log-tools").hidden = parkEntries.length === 0;
         render3D();
@@ -4107,19 +4146,21 @@
 
       function updateSelectionUi() {
         const list = activeEntries();
+        for (const group of markerLayer.querySelectorAll("[data-entry]")) group.style.display = selectedIds.has(group.dataset.entry) ? "" : "none";
         for (const row of logList.querySelectorAll(".log-row")) {
           const picked = selectedIds.has(row.dataset.play);
           row.classList.toggle("selected", picked);
           row.querySelector("[data-pick]").checked = picked;
         }
-        document.getElementById("sel-count").textContent = `${selectedIds.size} of ${list.length} selected`;
+        const selCount = list.filter((entry) => selectedIds.has(entry.id)).length;
+        document.getElementById("sel-count").textContent = `${selCount} of ${list.length} selected`;
         for (const chip of document.querySelectorAll("[data-select]")) {
           const kind = chip.dataset.select;
           const group = kind === "all" ? list : kind === "none" ? [] : list.filter((entry) => entry.result === kind);
           chip.classList.toggle("active", group.length > 0 && group.every((entry) => selectedIds.has(entry.id)));
         }
-        document.getElementById("play-selected-button").disabled = selectedIds.size === 0;
-        document.getElementById("delete-selected-button").disabled = selectedIds.size === 0;
+        document.getElementById("play-selected-button").disabled = selCount === 0;
+        document.getElementById("delete-selected-button").disabled = selCount === 0;
       }
 
       function playEntries(list) {

@@ -118,6 +118,42 @@
     return center + (side - center) * Math.pow(Math.abs(angle) / 45, 1.35);
   }
 
+  // Distance to the wall or stands along a bearing: the outfield fence on fair ground, then the foul-territory wall
+  // as outlined in the park art (falling back to a closing-in estimate). keepInside() uses it too, so fielders and the ball agree.
+  function foulWallAt(park, degrees) {
+    if (typeof require === 'function' && !root.PARK_FOUL_WALLS) {
+      try { require('./foul-walls.js'); } catch (error) { /* falls back to the estimate */ }
+    }
+    const path = root.PARK_FOUL_WALLS && root.PARK_FOUL_WALLS[park.id];
+    if (!path) return null;
+    const dx = Math.sin(degrees * Math.PI / 180);
+    const dy = Math.cos(degrees * Math.PI / 180);
+    let best = Infinity;
+    for (let i = 0; i < path.length - 1; i += 1) {
+      const [ax, ay] = path[i];
+      const [bx, by] = path[i + 1];
+      const ex = bx - ax;
+      const ey = by - ay;
+      const den = dx * ey - dy * ex;
+      if (Math.abs(den) < 1e-9) continue;
+      const t = (ax * ey - ay * ex) / den;
+      const u = (ax * dy - ay * dx) / den;
+      if (t > 1 && u >= 0 && u <= 1 && t < best) best = t;
+    }
+    return best < Infinity ? best : null;
+  }
+
+  function boundaryAt(park, degrees) {
+    const m = Math.abs(degrees);
+    const limit = foulLimit(park, degrees);
+    if (m <= limit) return fenceAt(park, degrees);
+    const drawn = foulWallAt(park, degrees);
+    if (drawn !== null) return drawn;
+    const edge = fenceAt(park, degrees < 0 ? -limit : limit);
+    if (m <= 90) return edge + (80 - edge) * (m - limit) / (90 - limit);
+    return 55;
+  }
+
   function wallAt(park, degrees) {
     const sample = wallSample(park, degrees);
     if (sample) return sample.height;
@@ -130,13 +166,26 @@
   /* ----------------------------------------------------------- ball flight */
 
   const BALL = { drag: 0.0019, lift: 0.0008, g: 32.174, startHeight: 3 };
-  const FOUL_POLE_REACH = 0.6;
+  const FOUL_POLE_REACH = 0.3;
 
   /* ------------------------------------------------------------ weather and spin */
 
   const FPS = 1.46667;
   // Damped to 70% of true density loss: the sim's exit-velocity tail is thin, so full density makes Coors absurd.
   const airDensity = (altitudeFt) => 1 - 0.7 * (1 - Math.pow(1 - 6.87e-6 * Math.max(0, altitudeFt || 0), 4.256));
+
+  // Air density tracks 1/absolute temperature (70 F = 1.0): about 1% less dense per 5 F, which is roughly
+  // 3 ft of carry per 10 F on a 400 ft fly ball, in line with published studies.
+  const REF_TEMP_F = 70;
+  const tempFactor = (tempF) => (REF_TEMP_F + 459.67) / ((Number.isFinite(tempF) ? tempF : REF_TEMP_F) + 459.67);
+
+  // Typical game-time temperature (F) by park; roofed parks are climate controlled when closed.
+  const PARK_TEMP = {
+    angels: 74, brewers: 72, cardinals: 78, braves: 79, yankees: 70, cubs: 68, mariners: 64, rays: 72, twins: 68,
+    athletics: 70, 'blue-jays': 68, 'white-sox': 71, guardians: 66, pirates: 69, padres: 68, giants: 62,
+    nationals: 74, marlins: 82, royals: 72, reds: 73, rangers: 85, 'red-sox': 66, dodgers: 72, astros: 82,
+    rockies: 68, tigers: 67, phillies: 73, mets: 71, diamondbacks: 90, orioles: 70
+  };
 
   function parkEnv(park) {
     if (typeof require === 'function' && !root.PARK_ENV) {
@@ -166,9 +215,17 @@
     const w = weather || {};
     const info = parkEnv(park);
     const alt = Number.isFinite(Number(w.altitude)) && w.altitude !== '' && w.altitude !== null && w.altitude !== undefined ? Number(w.altitude) : info.alt;
+    const indoors = info.roof === 'dome' || (info.roof === 'retractable' && w.roof !== 'open');
+    const tmode = ['fixed', 'random', 'park'].includes(w.tempMode) ? w.tempMode : 'standard';
+    let temp = REF_TEMP_F;
+    if (tmode === 'fixed') temp = Number.isFinite(Number(w.temp)) && w.temp !== '' && w.temp !== null ? Number(w.temp) : REF_TEMP_F;
+    else if (indoors) temp = 72;
+    else if (tmode === 'random') temp = Math.round(rng.between(40, 100));
+    else if (tmode === 'park') temp = Math.round(clamp((PARK_TEMP[park.id] || 70) + 9 * rng.gauss(), 30, 110));
     const env = {
       alt,
-      rho: airDensity(alt),
+      temp,
+      rho: airDensity(alt) * tempFactor(temp),
       cf: info.cf,
       roofType: info.roof,
       roofOpen: info.roof === 'retractable' && w.roof === 'open',
@@ -245,6 +302,8 @@
   // Straight-line flight along `dir` degrees. Returns time-stamped points (feet, seconds).
   // opts.spin = { b: backspin, s: sidespin (+ curves toward right field) }, opts.rho = air density ratio,
   // opts.wind = { x, y } mph in field coordinates.
+  const settings = { foulOver: false };
+
   function flightSim(ev, la, dir, park, opts = {}) {
     const dt = 1 / 120;
     const heading = dir * Math.PI / 180;
@@ -279,6 +338,7 @@
     let pending = false;
     const baseDepth = (px) => 90 * Math.cos(foulLimit(park, px) * Math.PI / 180);
     let fence = Infinity;
+    let past = false;
     let wallHeight = wallAt(park, dir);
     while (t < 14) {
       t += dt;
@@ -308,14 +368,23 @@
       const nx = x + vx * dt;
       const ny = y + vy * dt;
       const here = angleOf(nx, ny);
-      const reach = opts.noFence || Math.abs(here) > 90 ? Infinity : fenceAt(park, here);
+      let reach = opts.noFence || past ? Infinity : boundaryAt(park, here);
+      if (!past && !opts.noFence && firstLand < 0 && !rolling && (opts.foulOver ?? settings.foulOver)) {
+        const lim = foulLimit(park, here);
+        const wallDist = reach;
+        const miss = wallDist * Math.abs(Math.abs(here) - lim) * Math.PI / 180;
+        if (Math.abs(here) > lim && miss > FOUL_POLE_REACH && Math.hypot(nx, ny) >= wallDist && nx * vx + ny * vy > 0 && Math.max(z, nz) > 8) {
+          past = true;
+          reach = Infinity;
+        }
+      }
       const radial = nx * vx + ny * vy;
       if (Math.hypot(nx, ny) >= reach && radial > 0) {
         fence = reach;
-        wallHeight = wallAt(park, here);
-        const crossZ = rolling ? 0 : z;
         const limit = foulLimit(park, here);
         const crossFair = Math.abs(here) <= limit;
+        wallHeight = crossFair || Math.abs(here) <= limit + 1 ? wallAt(park, here) : 8;
+        const crossZ = rolling ? 0 : Math.max(z, nz);
         const poleMiss = reach * Math.abs(Math.abs(here) - limit) * Math.PI / 180;
         if (crossZ > wallHeight && firstLand < 0) {
           landAngle = here;
@@ -456,9 +525,7 @@
   // Keeps a point inside the park: the fence in fair ground, the stands in foul ground, the backstop behind the plate.
   function keepInside(park, x, y) {
     const angle = Math.atan2(x, y) * 180 / Math.PI;
-    const m = Math.abs(angle);
-    const fence = fenceAt(park, angle);
-    const limit = (m <= 45 ? fence : m <= 90 ? fence + (80 - fence) * (m - 45) / 45 : 55) - 0.4;
+    const limit = boundaryAt(park, angle) - 0.4;
     const r = Math.hypot(x, y);
     return r > limit && r > 0 ? { x: x * limit / r, y: y * limit / r } : { x, y };
   }
@@ -1480,6 +1547,11 @@
       result.hitBases = 2;
       result.groundRule = true;
       result.spot = { x: end.x, y: end.y };
+      // The nearest fielder chases the ball down at the wall; no throws are needed.
+      const chase = fieldBall(ball, fielders);
+      result.fielder = chase.f;
+      result.time = chase.t;
+      result.air = false;
       return result;
     }
 
@@ -1680,8 +1752,16 @@
 
   /* ------------------------------------------------------------ play application */
 
+  // Hit distance: where the ball first touched down, or would have if the wall hadn't stopped it.
+  function hitDistance(ball, result) {
+    if (ball.hr) return result.distance;
+    const caught = result.airOut || (result.kind === 'out' && result.air);
+    if (ball.la >= 10 && !caught) return ball.hitDist != null ? ball.hitDist : ball.landing.d;
+    return result.spot ? Math.hypot(result.spot.x, result.spot.y) : ball.landing.d;
+  }
+
   function describeBall(ball, result) {
-    const distance = Math.round(result.ball.hr ? result.distance : (result.spot ? Math.hypot(result.spot.x, result.spot.y) : 0));
+    const distance = Math.round(hitDistance(result.ball, result));
     return `${Math.round(ball.ev)} mph, ${Math.round(ball.la)}°, ${distance} ft`;
   }
 
@@ -1741,7 +1821,7 @@
   }
 
   function playText(batter, result, ball) {
-    const ballInfo = `(${Math.round(ball.ev)} mph, ${Math.round(ball.la)}°, ${Math.round(result.ball.hr ? result.distance : Math.hypot(result.spot.x, result.spot.y))} ft)`;
+    const ballInfo = `(${Math.round(ball.ev)} mph, ${Math.round(ball.la)}°, ${Math.round(hitDistance(result.ball, result))} ft)`;
     const how = contactWord(ball.la);
     const pos = result.fielder ? result.fielder.pos : '';
     if (result.kind === 'hr') {
@@ -1967,12 +2047,15 @@
         if (caught) {
           event.call = 'foul popup caught';
           event.text = `${label}: foul popup caught by ${caught.f.pos}.`;
+          event.foul = { ...flight, pts: flight.pts.filter((p) => p.t < caught.t) };
+          event.foulCatch = { pos: caught.f.pos, x: caught.x, y: caught.y, t: caught.t };
           const outcome = recordOut(g, pa, event, `${batter.name} pops out to ${caught.f.pos} in foul territory.`);
           return finishPA(g, pa, outcome);
         }
       }
       event.call = 'foul';
       event.foul = flightOf(foulBall);
+      event.foulEdge = Math.abs(Math.abs(event.foul.landAngle) - foulLimit(g.park, event.foul.landAngle));
       if (g.count.strikes < 2) g.count.strikes += 1;
     }
 
@@ -1983,6 +2066,10 @@
         if (grab.index < ball.pts.length - 1) ball.grd = false;
       }
       if (ball.hr) ball.hrDistance = flightOf(ballInPlay, { noFence: true }).landing.d;
+      else if (ball.wallHit >= 0 && ball.wallHit < ball.firstLand) {
+        ball.airWall = flightOf(ballInPlay, { noFence: true }).landing;
+        ball.hitDist = ball.airWall.d;
+      }
       ball.wind = ballInPlay.wind;
       ball.spin = ballInPlay.spin;
       event.call = 'in play';
@@ -2366,7 +2453,7 @@
       if (only && !only.includes(index)) return null;
       const { ball, result, batter } = item;
       const point = ball.hr ? flightSim(ball.ev, ball.la, ball.dir, g.park, flyOf(g, ball, { noFence: true })).landing
-        : ball.la >= 10 ? (ball.grd ? ball.pts[ball.firstLand] : ball.landing) : (result.spot || ball.landing);
+        : ball.la >= 10 ? ((ball.airWall && !result.airOut) ? ball.airWall : ball.grd ? ball.pts[ball.firstLand] : ball.landing) : (result.spot || ball.landing);
       const fielded = !ball.hr && result.spot ? result.spot : null;
       const kind = result.kind;
       const label = kind === 'hr' ? 'home run' : kind === 'hit' ? ['out', 'single', 'double', 'triple', 'home run'][result.hitBases] : 'out';
@@ -2385,6 +2472,7 @@
         date,
         stadiumId: g.park.id,
         altitude: Math.round(g.env.alt),
+        temperature: g.env.temp,
         wind: ball.wind ? { x: Math.round(ball.wind.x * 10) / 10, y: Math.round(ball.wind.y * 10) / 10 } : null,
         coordSpace: 'feet'
       };
@@ -3242,12 +3330,12 @@
 
   const GameEngine = {
     PARK_LIST, POSITIONS, STYLES, PITCH_TYPES, DEFAULT_MIX, pitchSpread, ZONE, TIMING_WINDOW, LOC_WINDOW,
-    parkById, fenceAt, wallAt, flightSim, parkEnv, makeEnv, windNow, windText, windVector, airDensity, defaultSpot, shiftedSpot, setShift, SHIFT_PRESETS,
+    settings, parkById, fenceAt, boundaryAt, wallAt, flightSim, parkEnv, makeEnv, windNow, windText, windVector, airDensity, tempFactor, PARK_TEMP, defaultSpot, shiftedSpot, setShift, SHIFT_PRESETS,
     createGame, validateTeam, stepPitch, nextPitch, completeLive, reviewLive, resumeSteal, challengeCall, pendingReview,
     simPlateAppearance, simHalfInning, simGame, stealOdds, canSteal,
     snapshot, boxScore, sprayChartEntries, generateTeam, makeRng, contactWord, currentBatter, currentPitcher,
     batterOverall, pitcherOverall, offenseOf, defenseOf, teamRatings, mphToVelo, veloToMph, positionPenalty, eligibleAt,
-    pinchHit, pinchRun, defensiveSub, pitchingChange, shortName, supportPlan, fieldTracks, fieldSpeed, keepInside
+    pinchHit, pinchRun, defensiveSub, pitchingChange, shortName, supportPlan, fieldTracks, fieldSpeed, keepInside, hitDistance
       };
   if (typeof module !== 'undefined' && module.exports) module.exports = GameEngine;
   else root.GameEngine = GameEngine;

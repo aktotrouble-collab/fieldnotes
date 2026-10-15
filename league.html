@@ -1,0 +1,793 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Field Notes · League Mode</title>
+  <style>
+    :root { --bg:#f4f1e8; --card:#fffdf7; --ink:#1f2a24; --mute:#6c756f; --line:#ddd7c6; --green:#29845e; --accent:#d27637; --blue:#3277a7; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.4 system-ui, "Segoe UI", sans-serif; }
+    a { color:var(--green); }
+    header { display:flex; align-items:center; justify-content:space-between; padding:14px 22px; border-bottom:1px solid var(--line); background:var(--card); }
+    header span { color:var(--mute); font-size:13px; margin-left:8px; }
+    main { max-width:1280px; margin:0 auto; padding:18px 22px 60px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-bottom:14px; }
+    .card h2 { margin:0 0 10px; font-size:15px; }
+    .card h3 { margin:12px 0 6px; font-size:13px; }
+    .row { display:flex; flex-wrap:wrap; gap:12px; align-items:end; }
+    label { display:flex; flex-direction:column; font-size:12px; color:var(--mute); gap:3px; }
+    label.inline { flex-direction:row; align-items:center; gap:6px; }
+    input, select, button { font:inherit; }
+    input, select { padding:5px 7px; border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--ink); }
+    input[type=number] { width:76px; }
+    input[type=color] { padding:0; width:34px; height:26px; }
+    button { padding:7px 12px; border:1px solid var(--line); border-radius:8px; background:#fff; cursor:pointer; color:var(--ink); }
+    button:hover:not(:disabled) { border-color:var(--green); }
+    button:disabled { opacity:.45; cursor:default; }
+    button.primary { background:var(--green); color:#fff; border-color:var(--green); }
+    button.small { padding:2px 8px; font-size:12px; }
+    table { border-collapse:collapse; width:100%; }
+    th, td { padding:3px 7px; text-align:right; font-size:12px; white-space:nowrap; }
+    th:first-child, td:first-child, .l { text-align:left; }
+    th { color:var(--mute); font-weight:600; border-bottom:1px solid var(--line); }
+    th.sort { cursor:pointer; }
+    th.sort:hover { color:var(--ink); }
+    tbody tr:nth-child(even) { background:rgba(0,0,0,.025); }
+    tr.mine td { font-weight:700; }
+    .scroll { overflow-x:auto; }
+    .tabs { display:flex; flex-wrap:wrap; gap:4px; margin:0 0 12px; }
+    .tabs button { border-radius:8px 8px 0 0; }
+    .tabs button.on { background:var(--green); color:#fff; border-color:var(--green); }
+    .mute { color:var(--mute); }
+    .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:-1px; }
+    .grid2 { display:grid; grid-template-columns:repeat(auto-fit, minmax(420px, 1fr)); gap:14px; }
+    .grid3 { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:14px; }
+    .bar { height:8px; background:var(--line); border-radius:4px; overflow:hidden; }
+    .bar > i { display:block; height:100%; background:var(--green); width:0; }
+    .game-row { display:flex; align-items:center; gap:10px; padding:5px 0; border-bottom:1px solid var(--line); }
+    .game-row .teams { flex:1; }
+    .game-row .detail { color:var(--mute); font-size:12px; }
+    .series { border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-bottom:8px; background:#fff; }
+    .series.done { opacity:.8; }
+    .champ { font-size:18px; font-weight:700; }
+    .note { color:var(--mute); font-size:12px; margin-top:6px; }
+    .err { color:#b3392f; white-space:pre-line; margin-top:8px; }
+    .pill { display:inline-block; padding:1px 7px; border-radius:10px; background:var(--line); font-size:11px; margin-left:4px; }
+    .hidden { display:none !important; }
+  </style>
+</head>
+<body>
+  <header>
+    <div><strong>Field Notes</strong><span>League mode</span></div>
+    <div style="display:flex;gap:16px;align-items:center"><a href="game.html">Game mode</a><a href="index.html">&larr; Spray chart</a></div>
+  </header>
+  <main id="app"></main>
+  <script src="park-walls.js"></script>
+  <script src="foul-walls.js"></script>
+  <script src="players-data.js"></script>
+  <script src="game-engine.js"></script>
+  <script src="league-engine.js"></script>
+  <script>
+  (() => {
+    const L = window.LeagueEngine;
+    const GE = window.GameEngine;
+    const $app = document.getElementById("app");
+    const INDEX_KEY = "field-notes-league-index-v1";
+    const LEAGUE_KEY = (id) => `field-notes-league-${id}`;
+    const PENDING_KEY = "field-notes-league-pending-v1";
+    const RESULT_KEY = "field-notes-league-result-v1";
+    const TEAMS_KEY = "field-notes-game-teams-v1";
+    const latestYear = window.MLB_PLAYERS ? window.MLB_PLAYERS.year : null;
+    const FIRST_SEASON = 2015;
+
+    const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    const f3 = (v) => (v >= 1 ? v.toFixed(3) : v.toFixed(3).replace(/^0/, "")) || ".000";
+    const f2 = (v) => v.toFixed(2);
+    const pct = (w, l) => (w + l ? f3(w / (w + l)) : ".000");
+
+    /* ----------------------------------------------------------- storage */
+    const readIndex = () => { try { return JSON.parse(localStorage.getItem(INDEX_KEY)) || []; } catch (e) { return []; } };
+    const writeIndex = (list) => localStorage.setItem(INDEX_KEY, JSON.stringify(list));
+    let league = null;
+    let view = { tab: "standings", statKind: "bat", statPhase: "reg", statTeam: "all", statSort: null, statAll: false, schedTeam: "all", schedDay: null, teamIdx: 0 };
+    let running = false;
+    let stopFlag = false;
+    let saveTimer = null;
+
+    function saveNow() {
+      if (!league) return;
+      try {
+        localStorage.setItem(LEAGUE_KEY(league.id), JSON.stringify(league));
+        const list = readIndex().filter((x) => x.id !== league.id);
+        list.unshift({ id: league.id, name: league.name, label: league.settings.seasonLabel, updated: Date.now() });
+        writeIndex(list);
+      } catch (e) {
+        alert("Couldn't save the league (browser storage is full). Export it from the league list and delete older leagues.");
+      }
+    }
+    const save = () => { clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 300); };
+
+    function openLeague(id) {
+      const raw = localStorage.getItem(LEAGUE_KEY(id));
+      if (!raw) return;
+      league = JSON.parse(raw);
+      localStorage.setItem("field-notes-league-current", id);
+      view.teamIdx = league.settings.myTeam != null ? league.settings.myTeam : 0;
+      view.schedDay = null;
+      importResult();
+      render();
+    }
+
+    /* Applies a hands-on game result reported by game.html. */
+    function importResult() {
+      let res;
+      try { res = JSON.parse(localStorage.getItem(RESULT_KEY)); } catch (e) { res = null; }
+      if (!res || !league || res.leagueId !== league.id) return;
+      const ref = L.pendingGames(league).find((r) => r.id === res.refId);
+      localStorage.removeItem(RESULT_KEY);
+      localStorage.removeItem(PENDING_KEY);
+      if (!ref) return;
+      L.recordRef(league, ref, res.ex);
+      L.closeDayIfDone(league);
+      saveNow();
+    }
+
+    /* ------------------------------------------------------- season data */
+    function loadSeason(year, done) {
+      if (year === latestYear || (window.MLB_SEASONS && window.MLB_SEASONS[year])) return done(true);
+      const s = document.createElement("script");
+      s.src = `seasons/players-${year}.js`;
+      s.onload = () => done(true);
+      s.onerror = () => { s.remove(); done(false); };
+      document.head.append(s);
+    }
+    const seasonData = (year) => (year === latestYear ? window.MLB_PLAYERS : window.MLB_SEASONS[year]);
+
+    /* ------------------------------------------------------ list / create */
+    let draft = null;
+
+    function newDraft(source) {
+      const d = { name: "My League", source, year: latestYear, seed: "", count: 16, leagues: 2, perDivision: 4, teams: [], settings: L.defaults(), saved: [] };
+      d.settings.startDate = `${latestYear || 2026}-03-26`;
+      fillDraftTeams(d);
+      try {
+        const saved = JSON.parse(localStorage.getItem(TEAMS_KEY));
+        d.saved = Array.isArray(saved) ? saved : [];
+      } catch (e) { d.saved = []; }
+      return d;
+    }
+
+    function fillDraftTeams(d) {
+      const keepSaved = d.teams.filter((t) => t.roster);
+      let base;
+      if (d.source === "mlb") base = L.mlbDescriptors(Object.keys(L.CLUBS)).map((t) => ({ ...t, on: true }));
+      else base = L.generatedDescriptors(d.count, d.leagues, d.perDivision, Number(d.seed) || 1).map((t) => ({ ...t, on: true }));
+      d.teams = base.concat(keepSaved);
+      d.settings.leagueNames = d.source === "mlb" ? ["AL", "NL"] : ["A", "B", "C", "D"].slice(0, d.leagues);
+    }
+
+    function renderList() {
+      const list = readIndex();
+      $app.innerHTML = `
+        <div class="card"><h2>Your leagues</h2>
+          ${list.length ? `<table>${list.map((x) => `<tr><td class="l"><b>${esc(x.name)}</b> <span class="mute">${esc(x.label || "")}</span></td>
+            <td><button class="small" data-open="${x.id}">Open</button> <button class="small" data-export="${x.id}">Export</button> <button class="small" data-del="${x.id}">Delete</button></td></tr>`).join("")}</table>` : `<p class="mute">No leagues yet. Create one below.</p>`}
+          <div class="row" style="margin-top:10px"><button id="import-btn">Import league file…</button><input type="file" id="import-file" accept=".json" class="hidden"></div>
+        </div>
+        <div class="card"><h2>New league</h2>
+          <div class="row"><button class="primary" id="new-mlb">Real MLB season</button><button class="primary" id="new-gen">Generated teams</button></div>
+          <p class="note">Real MLB uses each club's best players from the season you choose. Generated builds fictional clubs. Every detail can be customised before the season starts.</p>
+        </div>`;
+      $app.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => openLeague(b.dataset.open)));
+      $app.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => {
+        if (!confirm("Delete this league and all its stats?")) return;
+        localStorage.removeItem(LEAGUE_KEY(b.dataset.del));
+        writeIndex(readIndex().filter((x) => x.id !== b.dataset.del));
+        renderList();
+      }));
+      $app.querySelectorAll("[data-export]").forEach((b) => b.addEventListener("click", () => {
+        const blob = new Blob([localStorage.getItem(LEAGUE_KEY(b.dataset.export))], { type: "application/json" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `league-${b.dataset.export}.json`;
+        a.click();
+      }));
+      document.getElementById("import-btn").addEventListener("click", () => document.getElementById("import-file").click());
+      document.getElementById("import-file").addEventListener("change", (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        file.text().then((text) => {
+          try {
+            const lg = JSON.parse(text);
+            if (!lg.teams || !lg.schedule) throw new Error("bad");
+            lg.id = `lg-${Date.now().toString(36)}`;
+            localStorage.setItem(LEAGUE_KEY(lg.id), JSON.stringify(lg));
+            writeIndex([{ id: lg.id, name: lg.name, label: lg.settings.seasonLabel, updated: Date.now() }, ...readIndex()]);
+            renderList();
+          } catch (err) { alert("That file isn't a league export."); }
+        });
+      });
+      document.getElementById("new-mlb").addEventListener("click", () => { draft = newDraft("mlb"); renderCreate(); });
+      document.getElementById("new-gen").addEventListener("click", () => { draft = newDraft("generated"); renderCreate(); });
+    }
+
+    const opt = (items, cur) => items.map(([v, t]) => `<option value="${esc(v)}"${String(v) === String(cur) ? " selected" : ""}>${esc(t)}</option>`).join("");
+    const parkOpts = (cur) => opt(GE.PARK_LIST.map((p) => [p.id, p.name]), cur);
+
+    /* Settings fields shared by the create form and the in-season settings tab. */
+    function settingsHtml(s, locked) {
+      const dis = locked ? " disabled" : "";
+      const w = s.weather;
+      return `
+      <div class="row">
+        <label>Season name<input id="s-label" type="text" value="${esc(s.seasonLabel)}" style="width:130px"></label>
+        <label>Games per team<input id="s-games" type="number" min="1" value="${s.gamesPerTeam}"${dis}></label>
+        <label>Series length<input id="s-series" type="number" min="1" max="7" value="${s.seriesLength}"${dis}></label>
+        <label>Schedule<select id="s-emph"${dis}>${opt([["mlb", "MLB-style (division heavy)"], ["balanced", "Balanced (everyone equal)"], ["division", "Mostly division"], ["no-interleague", "No interleague"]], s.emphasis)}</select></label>
+        <label>First game<input id="s-start" type="date" value="${esc(s.startDate)}"${dis}></label>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label>Innings<input id="s-inn" type="number" min="1" value="${s.innings}"></label>
+        <label class="inline"><input id="s-ghost" type="checkbox"${s.ghost ? " checked" : ""}> Extra-inning runner</label>
+        <label>Ballpark<select id="s-parkmode">${opt([["home", "Home team's park"], ["neutral", "One neutral park"], ["random", "Random each game"]], s.parkMode)}</select></label>
+        <label>Neutral park<select id="s-neutral">${parkOpts(s.neutralPark)}</select></label>
+        <label>Rest days for starters<select id="s-rest">${opt([["off", "Never rest"], ["light", "Light"], ["normal", "Normal"], ["heavy", "Heavy"]], s.rest)}</select></label>
+        <label>Rotation<input id="s-rot" type="number" min="1" max="8" value="${s.rotation}"${dis}></label>
+        <label>Bullpen<input id="s-pen" type="number" min="1" max="14" value="${s.bullpen}"${dis}></label>
+        <label>Bench<input id="s-bench" type="number" min="2" max="12" value="${s.bench}"${dis}></label>
+      </div>
+      <h3>Weather</h3>
+      <div class="row">
+        <label>Wind<select id="w-mode">${opt([["calm", "Calm"], ["park", "Weighted to the park"], ["random", "Random"], ["fixed", "I set it"]], w.mode)}</select></label>
+        <label>Wind behaviour<select id="w-var">${opt([["steady", "Steady"], ["gusty", "Gusty"], ["inning", "Shifts each inning"]], w.variation)}</select></label>
+        <label>Wind mph<input id="w-speed" type="number" min="0" value="${w.speed || 0}"></label>
+        <label>Wind from (deg)<input id="w-from" type="number" value="${w.from || 0}"></label>
+        <label>Temperature<select id="w-tmode">${opt([["standard", "Standard 70°F"], ["park", "Typical for the park"], ["random", "Random 40-100"], ["fixed", "I set it"]], w.tempMode)}</select></label>
+        <label>Temp °F<input id="w-temp" type="number" value="${w.temp == null ? 70 : w.temp}"></label>
+      </div>
+      <h3>Playoffs</h3>
+      <div class="row">
+        <label class="inline"><input id="p-on" type="checkbox"${s.playoffs.enabled ? " checked" : ""}> Play postseason</label>
+        <label>Teams per league<input id="p-q" type="number" min="1" value="${s.playoffs.qualifiers}"></label>
+        <label>Series lengths by round<input id="p-len" type="text" value="${s.playoffs.roundLengths.join(",")}" style="width:110px"></label>
+        <label class="inline"><input id="p-reseed" type="checkbox"${s.playoffs.reseed ? " checked" : ""}> Reseed each round</label>
+      </div>
+      <p class="note">Top seeds get a bye when the field isn't a power of two. The last length is used for the championship series.</p>
+      <h3>Playing games</h3>
+      <div class="row">
+        <label>Control<select id="s-control">${opt([["hands", "Hands-on: I play my team's games"], ["all", "Sim everything, play any game I choose"], ["sim", "Sim only"]], s.control)}</select></label>
+      </div>`;
+    }
+
+    function readSettings(base) {
+      const g = (id) => document.getElementById(id);
+      const s = JSON.parse(JSON.stringify(base));
+      s.seasonLabel = g("s-label").value || s.seasonLabel;
+      if (!g("s-games").disabled) {
+        s.gamesPerTeam = Math.max(1, Number(g("s-games").value) || 162);
+        s.seriesLength = Math.max(1, Number(g("s-series").value) || 3);
+        s.emphasis = g("s-emph").value;
+        s.startDate = g("s-start").value || s.startDate;
+        s.rotation = Math.max(1, Number(g("s-rot").value) || 5);
+        s.bullpen = Math.max(1, Number(g("s-pen").value) || 7);
+        s.bench = Math.max(2, Number(g("s-bench").value) || 5);
+      }
+      s.innings = Math.max(1, Number(g("s-inn").value) || 9);
+      s.ghost = g("s-ghost").checked;
+      s.parkMode = g("s-parkmode").value;
+      s.neutralPark = g("s-neutral").value;
+      s.rest = g("s-rest").value;
+      s.weather = { mode: g("w-mode").value, variation: g("w-var").value, speed: Number(g("w-speed").value) || 0, from: Number(g("w-from").value) || 0, tempMode: g("w-tmode").value, temp: Number(g("w-temp").value) };
+      const lens = g("p-len").value.split(/[ ,]+/).map(Number).filter((n) => n >= 1);
+      s.playoffs = { enabled: g("p-on").checked, qualifiers: Math.max(1, Number(g("p-q").value) || 1), roundLengths: lens.length ? lens : [3, 5, 7, 7], reseed: g("p-reseed").checked };
+      s.control = g("s-control").value;
+      return s;
+    }
+
+    function renderCreate() {
+      const d = draft;
+      const years = [];
+      for (let y = latestYear; y >= FIRST_SEASON; y -= 1) years.push([y, y]);
+      const savedHtml = d.saved.length ? `<h3>Your saved Game-mode teams</h3><div class="row">${d.saved.map((t, i) => `<label class="inline"><input type="checkbox" data-saved="${i}"${d.teams.some((x) => x.roster && x.savedIdx === i) ? " checked" : ""}> ${esc(t.name)}</label>`).join("")}</div>` : "";
+      $app.innerHTML = `
+        <div class="card"><h2>New league · ${d.source === "mlb" ? "Real MLB" : "Generated"}</h2>
+          <div class="row">
+            <label>League name<input id="d-name" type="text" value="${esc(d.name)}" style="width:180px"></label>
+            ${d.source === "mlb" ? `<label>MLB season<select id="d-year">${opt(years, d.year)}</select></label>` : `
+              <label>Teams<input id="d-count" type="number" min="2" max="40" value="${d.count}"></label>
+              <label>Leagues<select id="d-lgs">${opt([[1, "1"], [2, "2"], [3, "3"], [4, "4"]], d.leagues)}</select></label>
+              <label>Teams per division<input id="d-perdiv" type="number" min="2" max="10" value="${d.perDivision}"></label>`}
+            <label>Seed (optional)<input id="d-seed" type="number" value="${esc(d.seed)}" placeholder="random" style="width:100px"></label>
+            <label>My team<select id="d-my"></select></label>
+          </div>
+          <h3>Teams</h3>
+          <div class="scroll"><table id="team-table"></table></div>
+          ${savedHtml}
+          <h3>Settings</h3>${settingsHtml(d.settings, false)}
+          <div class="row" style="margin-top:14px"><button class="primary" id="d-create">Create league</button><button id="d-cancel">Cancel</button></div>
+          <div class="err" id="d-err"></div>
+        </div>`;
+      drawTeamTable();
+      const g = (id) => document.getElementById(id);
+      g("d-cancel").addEventListener("click", () => { draft = null; renderList(); });
+      g("d-name").addEventListener("input", (e) => { d.name = e.target.value; });
+      g("d-seed").addEventListener("input", (e) => { d.seed = e.target.value; });
+      if (d.source === "mlb") g("d-year").addEventListener("change", (e) => { d.year = Number(e.target.value); d.settings.startDate = `${d.year}-03-26`; g("s-start").value = d.settings.startDate; });
+      else {
+        const regen = () => {
+          d.count = Math.max(2, Number(g("d-count").value) || 16);
+          d.leagues = Number(g("d-lgs").value);
+          d.perDivision = Math.max(2, Number(g("d-perdiv").value) || 4);
+          fillDraftTeams(d);
+          drawTeamTable();
+        };
+        ["d-count", "d-lgs", "d-perdiv", "d-seed"].forEach((id) => g(id).addEventListener("change", regen));
+      }
+      $app.querySelectorAll("[data-saved]").forEach((cb) => cb.addEventListener("change", () => {
+        const i = Number(cb.dataset.saved);
+        d.teams = d.teams.filter((t) => !(t.roster && t.savedIdx === i));
+        if (cb.checked) {
+          const t = d.saved[i];
+          d.teams.push({ name: t.name, abbr: (t.abbr || t.name.slice(0, 3)).toUpperCase().slice(0, 4), color: t.color || "#29845e", park: "yankees", league: d.teams[0] ? d.teams[0].league : "A", division: d.teams[0] ? d.teams[0].division : "East", roster: t, savedIdx: i, on: true });
+        }
+        drawTeamTable();
+      }));
+      g("d-create").addEventListener("click", createFromDraft);
+    }
+
+    function drawTeamTable() {
+      const d = draft;
+      const table = document.getElementById("team-table");
+      table.innerHTML = `<thead><tr><th>In</th><th class="l">Name</th><th class="l">Abbr</th><th>Color</th><th class="l">Home park</th><th class="l">League</th><th class="l">Division</th></tr></thead><tbody>${d.teams.map((t, i) => `
+        <tr><td><input type="checkbox" data-f="on" data-i="${i}"${t.on ? " checked" : ""}></td>
+        <td class="l"><input type="text" data-f="name" data-i="${i}" value="${esc(t.name)}" style="width:190px"></td>
+        <td class="l"><input type="text" data-f="abbr" data-i="${i}" value="${esc(t.abbr)}" style="width:54px"></td>
+        <td><input type="color" data-f="color" data-i="${i}" value="${esc(t.color)}"></td>
+        <td class="l"><select data-f="park" data-i="${i}">${parkOpts(t.park)}</select></td>
+        <td class="l"><input type="text" data-f="league" data-i="${i}" value="${esc(t.league)}" style="width:70px"></td>
+        <td class="l"><input type="text" data-f="division" data-i="${i}" value="${esc(t.division)}" style="width:90px"></td></tr>`).join("")}</tbody>`;
+      table.querySelectorAll("[data-f]").forEach((el) => el.addEventListener("change", () => {
+        const t = d.teams[Number(el.dataset.i)];
+        t[el.dataset.f] = el.type === "checkbox" ? el.checked : el.value;
+        refreshMyTeam();
+      }));
+      refreshMyTeam();
+    }
+
+    function refreshMyTeam() {
+      const sel = document.getElementById("d-my");
+      if (!sel) return;
+      const cur = sel.value;
+      const on = draft.teams.filter((t) => t.on);
+      sel.innerHTML = `<option value="">None</option>` + on.map((t) => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join("");
+      sel.value = on.some((t) => t.name === cur) ? cur : (draft.mySaved || "");
+    }
+
+    function createFromDraft() {
+      const d = draft;
+      const err = document.getElementById("d-err");
+      err.textContent = "";
+      const on = d.teams.filter((t) => t.on);
+      if (on.length < 2) { err.textContent = "Pick at least two teams."; return; }
+      if (new Set(on.map((t) => t.name)).size !== on.length) { err.textContent = "Team names must be different."; return; }
+      const settings = readSettings(d.settings);
+      const myName = document.getElementById("d-my").value;
+      settings.myTeam = myName ? on.findIndex((t) => t.name === myName) : null;
+      if (settings.myTeam === null && settings.control === "hands") settings.control = "all";
+      settings.leagueNames = [...new Set(on.map((t) => t.league))];
+      if ((on.length * settings.gamesPerTeam) % 2) err.textContent = "Odd team count with odd games: one club will play a game fewer. Continuing.\n";
+      const make = () => {
+        try {
+          const seed = d.seed === "" ? undefined : Number(d.seed);
+          const lg = L.createLeague({
+            name: d.name || "My League", source: d.source, year: d.source === "mlb" ? d.year : null, seed, settings,
+            teams: on.map((t) => ({ code: t.code, name: t.name.trim(), abbr: t.abbr.trim() || t.name.slice(0, 3).toUpperCase(), color: t.color, park: t.park, league: t.league.trim() || "A", division: t.division.trim() || "East", roster: t.roster || null }))
+          }, d.source === "mlb" ? seasonData(d.year) : null);
+          league = lg;
+          draft = null;
+          view = { ...view, tab: "standings", schedDay: null, teamIdx: settings.myTeam != null ? settings.myTeam : 0 };
+          saveNow();
+          render();
+        } catch (e) { err.textContent = String(e.message || e); }
+      };
+      if (d.source === "mlb") {
+        err.textContent += "Loading player data…";
+        loadSeason(d.year, (ok) => { if (!ok) err.textContent = "Couldn't load that season's data."; else make(); });
+      } else make();
+    }
+
+    /* ------------------------------------------------------------ league */
+    const TABS = [["standings", "Standings"], ["schedule", "Schedule"], ["stats", "Stats"], ["leaders", "Leaders"], ["playoffs", "Playoffs"], ["teams", "Teams"], ["history", "History"], ["settings", "Settings"]];
+    const teamName = (i) => league.teams[i].name;
+    const dot = (i) => `<span class="dot" style="background:${esc(league.teams[i].color)}"></span>`;
+    const myIdx = () => league.settings.myTeam;
+
+    function render() {
+      if (!league) { renderList(); return; }
+      const s = league.settings;
+      const clock = league.clock;
+      const total = league.schedule.length;
+      const phaseText = league.phase === "regular" ? `Regular season · day ${Math.min(league.day + 1, total)} of ${total}` : league.phase === "playoffs" ? "Postseason" : "Season complete";
+      const champ = league.champion != null ? `<div class="champ">🏆 ${esc(teamName(league.champion))} are the ${esc(s.seasonLabel)} champions</div>` : "";
+      $app.innerHTML = `
+        <div class="card">
+          <div class="row" style="justify-content:space-between;align-items:center">
+            <div><h2 style="margin:0">${esc(league.name)} <span class="mute">· ${esc(s.seasonLabel)}</span></h2>
+              <div class="mute">${esc(L.dateOf(league, clock))} · ${phaseText}</div></div>
+            <div class="row"><button id="back-list">All leagues</button></div>
+          </div>
+          ${champ}
+          <div id="today"></div>
+          <div class="row" id="sim-ctl" style="margin-top:10px">
+            <button id="sim-day">Sim day</button><button id="sim-week">Sim week</button><button id="sim-month">Sim month</button>
+            <label class="inline">to <input type="date" id="sim-date" value="${L.dateOf(league, clock)}"></label><button id="sim-to">Sim to date</button>
+            <button id="sim-reg">Finish regular season</button><button id="sim-all">Sim to the end</button>
+            <button id="sim-stop" class="hidden">Stop</button>
+          </div>
+          <div class="bar" style="margin-top:10px"><i id="prog"></i></div>
+          <div class="note" id="sim-msg"></div>
+        </div>
+        <div class="tabs">${TABS.map(([k, t]) => `<button data-tab="${k}" class="${view.tab === k ? "on" : ""}">${t}</button>`).join("")}</div>
+        <div id="tab"></div>`;
+      document.getElementById("back-list").addEventListener("click", () => { saveNow(); league = null; renderList(); });
+      document.getElementById("sim-day").addEventListener("click", () => run({ days: 1 }));
+      document.getElementById("sim-week").addEventListener("click", () => run({ days: 7 }));
+      document.getElementById("sim-month").addEventListener("click", () => run({ days: 30 }));
+      document.getElementById("sim-to").addEventListener("click", () => run({ date: document.getElementById("sim-date").value }));
+      document.getElementById("sim-reg").addEventListener("click", () => run({ until: (lg) => lg.phase !== "regular" }));
+      document.getElementById("sim-all").addEventListener("click", () => run({ until: (lg) => lg.phase === "done" }));
+      document.getElementById("sim-stop").addEventListener("click", () => { stopFlag = true; });
+      $app.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => { view.tab = b.dataset.tab; render(); }));
+      renderToday();
+      renderTab();
+      updateButtons();
+    }
+
+    function updateButtons() {
+      const done = league.phase === "done";
+      $app.querySelectorAll("#sim-ctl button").forEach((b) => { if (b.id !== "sim-stop") b.disabled = running || done; });
+      const stop = document.getElementById("sim-stop");
+      if (stop) stop.classList.toggle("hidden", !running);
+    }
+
+    /* ------------------------------------------------------- today panel */
+    function heldRefs() {
+      const hold = L.holdFor(league);
+      return L.pendingGames(league).filter(hold);
+    }
+
+    function renderToday() {
+      const el = document.getElementById("today");
+      if (!el) return;
+      const refs = L.pendingGames(league);
+      const mode = league.settings.control;
+      const hold = L.holdFor(league);
+      if (league.phase === "done") { el.innerHTML = ""; return; }
+      const label = (r) => `${dot(r.away)}${esc(teamName(r.away))} <span class="mute">at</span> ${dot(r.home)}${esc(teamName(r.home))}`;
+      const rows = refs.filter((r) => mode === "all" || hold(r) || false);
+      el.innerHTML = rows.length ? `<h3>Today's games</h3>${rows.map((r) => `
+        <div class="game-row"><div class="teams">${label(r)}${r.post ? `<span class="pill">Playoffs</span>` : ""}</div>
+        ${mode !== "sim" ? `<button class="small primary" data-play="${r.id}">Play</button>` : ""}<button class="small" data-sim="${r.id}">Sim</button></div>`).join("")}` : "";
+      el.querySelectorAll("[data-play]").forEach((b) => b.addEventListener("click", () => playGame(b.dataset.play)));
+      el.querySelectorAll("[data-sim]").forEach((b) => b.addEventListener("click", () => {
+        const ref = L.pendingGames(league).find((r) => r.id === b.dataset.sim);
+        if (!ref) return;
+        L.simRef(league, ref);
+        L.closeDayIfDone(league);
+        saveNow();
+        render();
+      }));
+    }
+
+    function playGame(id) {
+      const ref = L.pendingGames(league).find((r) => r.id === id);
+      if (!ref) return;
+      const cfg = L.gameConfig(league, ref);
+      const names = [teamName(ref.away), teamName(ref.home)];
+      localStorage.setItem(PENDING_KEY, JSON.stringify({
+        leagueId: league.id, refId: id, config: cfg, label: `${names[0]} at ${names[1]}`,
+        colors: [league.teams[ref.away].color, league.teams[ref.home].color], abbrs: [league.teams[ref.away].abbr, league.teams[ref.home].abbr],
+        my: league.settings.myTeam === ref.away ? 0 : league.settings.myTeam === ref.home ? 1 : null
+      }));
+      saveNow();
+      location.href = "game.html?league=1";
+    }
+
+    /* -------------------------------------------------------- simulation */
+    function run(target) {
+      if (running || league.phase === "done") return;
+      running = true;
+      stopFlag = false;
+      const hold = L.holdFor(league);
+      const startClock = league.clock;
+      const msg = document.getElementById("sim-msg");
+      msg.textContent = "";
+      updateButtons();
+      const totalDays = league.schedule.length;
+      const finished = () => {
+        if (league.phase === "done") return true;
+        if (target.days != null) return league.clock - startClock >= target.days;
+        if (target.date) return L.dateOf(league, league.clock) >= target.date;
+        return target.until(league);
+      };
+      const tick = () => {
+        const t0 = performance.now();
+        let blocked = false;
+        while (!finished() && !stopFlag && performance.now() - t0 < 120) {
+          const res = L.simDay(league, hold);
+          if (res.held.length) { blocked = true; break; }
+        }
+        document.getElementById("prog").style.width = `${Math.min(100, (league.phase === "regular" ? league.day / totalDays : 1) * 100)}%`;
+        msg.textContent = `${L.dateOf(league, league.clock)} · ${league.log.length} games played`;
+        if (!finished() && !stopFlag && !blocked) { setTimeout(tick, 0); return; }
+        running = false;
+        if (blocked) msg.textContent = "Your game is ready. Play it or sim it above.";
+        saveNow();
+        render();
+        const m = document.getElementById("sim-msg");
+        if (m && blocked) m.textContent = "Your game is ready. Play it or sim it above.";
+      };
+      setTimeout(tick, 0);
+    }
+
+    /* -------------------------------------------------------------- tabs */
+    function renderTab() {
+      const el = document.getElementById("tab");
+      ({ standings: tabStandings, schedule: tabSchedule, stats: tabStats, leaders: tabLeaders, playoffs: tabPlayoffs, teams: tabTeams, history: tabHistory, settings: tabSettings }[view.tab])(el);
+    }
+
+    function tabStandings(el) {
+      const groups = L.standings(league);
+      const showDiv = groups.some((g) => g.divisions.length > 1);
+      const cols = `<th class="l">Team</th><th>W</th><th>L</th><th>PCT</th><th>GB</th><th>RS</th><th>RA</th><th>DIFF</th><th>Home</th><th>Away</th><th>Div</th><th>L10</th><th>STRK</th>`;
+      const rowHtml = (t) => {
+        const r = league.rec[t.idx];
+        const l10 = r.last.reduce((a, b) => a + b, 0);
+        return `<tr class="${t.idx === myIdx() ? "mine" : ""}"><td class="l">${dot(t.idx)}${esc(teamName(t.idx))}</td><td>${r.w}</td><td>${r.l}</td><td>${pct(r.w, r.l)}</td><td>${t.gb ? t.gb.toFixed(1) : "-"}</td>
+          <td>${r.rs}</td><td>${r.ra}</td><td>${r.rs - r.ra > 0 ? "+" : ""}${r.rs - r.ra}</td><td>${r.hw}-${r.hl}</td><td>${r.aw}-${r.al}</td><td>${r.dw}-${r.dl}</td><td>${l10}-${r.last.length - l10}</td><td>${r.streak > 0 ? "W" + r.streak : r.streak < 0 ? "L" + -r.streak : "-"}</td></tr>`;
+      };
+      el.innerHTML = `<div class="grid2">${groups.map((g) => `<div class="card"><h2>${esc(g.name)}</h2><div class="scroll">${showDiv ? g.divisions.map((d) => `
+        <table><thead><tr>${cols.replace("Team", esc(d.name))}</tr></thead><tbody>${d.teams.map(rowHtml).join("")}</tbody></table>`).join('<div style="height:10px"></div>') : ""}</div></div>`).join("")}</div>`;
+      if (league.phase !== "regular") return;
+    }
+
+    function dayRowHtml(day, k, away, home) {
+      const id = `${league.seasonNo}.${day}.${k}`;
+      const r = logMap()[id];
+      if (r) {
+        const aw = r.sa > r.sh;
+        return `<div class="game-row"><div class="teams"><span style="${aw ? "font-weight:700" : ""}">${dot(away)}${esc(teamName(away))} ${r.sa}</span> &nbsp; <span style="${aw ? "" : "font-weight:700"}">${dot(home)}${esc(teamName(home))} ${r.sh}</span>${r.inn > league.settings.innings ? `<span class="pill">F/${r.inn}</span>` : ""}
+          <div class="detail">${r.w ? `W: ${esc(r.w)}` : ""}${r.l ? ` · L: ${esc(r.l)}` : ""}${r.sv ? ` · SV: ${esc(r.sv)}` : ""}${r.hr.length ? ` · HR: ${esc(r.hr.join(", "))}` : ""} · H ${r.ha}-${r.hh} · E ${r.ea}-${r.eh}</div></div></div>`;
+      }
+      return `<div class="game-row"><div class="teams">${dot(away)}${esc(teamName(away))} <span class="mute">at</span> ${dot(home)}${esc(teamName(home))}</div></div>`;
+    }
+
+    let logCache = null;
+    function logMap() {
+      if (!logCache || logCache.n !== league.log.length || logCache.id !== league.id) {
+        const m = {};
+        for (const r of league.log) m[r.id] = r;
+        logCache = { n: league.log.length, id: league.id, m };
+      }
+      return logCache.m;
+    }
+
+    function tabSchedule(el) {
+      const team = view.schedTeam;
+      const opts = [["all", "All teams (by day)"], ...league.teams.map((t, i) => [i, t.name])];
+      let body = "";
+      if (team === "all") {
+        const day = view.schedDay == null ? Math.min(league.day, league.schedule.length - 1) : view.schedDay;
+        const games = league.schedule[day] || [];
+        body = `<div class="row" style="align-items:center"><button class="small" id="d-prev">&larr;</button><b>${esc(L.dateOf(league, day))}</b> <span class="mute">day ${day + 1} of ${league.schedule.length}</span><button class="small" id="d-next">&rarr;</button><button class="small" id="d-today">Current day</button></div>
+          ${games.map(([a, h], k) => dayRowHtml(day, k, a, h)).join("") || `<p class="mute">No games.</p>`}`;
+      } else {
+        const t = Number(team);
+        const rows = [];
+        league.schedule.forEach((games, d) => games.forEach(([a, h], k) => { if (a === t || h === t) rows.push({ d, k, a, h }); }));
+        const m = logMap();
+        body = `<div class="scroll"><table><thead><tr><th class="l">Date</th><th class="l">Opponent</th><th>Result</th><th class="l">Pitchers</th></tr></thead><tbody>${rows.map((x) => {
+          const r = m[`${league.seasonNo}.${x.d}.${x.k}`];
+          const home = x.h === t;
+          const opp = home ? x.a : x.h;
+          let res = "";
+          let pit = "";
+          if (r) {
+            const mine = home ? r.sh : r.sa;
+            const theirs = home ? r.sa : r.sh;
+            res = `${mine > theirs ? "W" : "L"} ${mine}-${theirs}`;
+            pit = `${r.w ? "W: " + r.w : ""} ${r.l ? "L: " + r.l : ""}`;
+          }
+          return `<tr><td class="l">${esc(L.dateOf(league, x.d))}</td><td class="l">${home ? "vs" : "@"} ${dot(opp)}${esc(teamName(opp))}</td><td>${res}</td><td class="l mute">${esc(pit)}</td></tr>`;
+        }).join("")}</tbody></table></div>`;
+      }
+      el.innerHTML = `<div class="card"><div class="row"><label>View<select id="sch-team">${opt(opts, team)}</select></label></div><div style="margin-top:10px">${body}</div></div>`;
+      document.getElementById("sch-team").addEventListener("change", (e) => { view.schedTeam = e.target.value; renderTab(); });
+      const prev = document.getElementById("d-prev");
+      if (prev) {
+        const cur = () => (view.schedDay == null ? Math.min(league.day, league.schedule.length - 1) : view.schedDay);
+        prev.addEventListener("click", () => { view.schedDay = Math.max(0, cur() - 1); renderTab(); });
+        document.getElementById("d-next").addEventListener("click", () => { view.schedDay = Math.min(league.schedule.length - 1, cur() + 1); renderTab(); });
+        document.getElementById("d-today").addEventListener("click", () => { view.schedDay = null; renderTab(); });
+      }
+    }
+
+    const BAT_COLS = [["name", "Player", "l"], ["team", "Tm", "l"], ["g", "G"], ["pa", "PA"], ["ab", "AB"], ["r", "R"], ["h", "H"], ["d", "2B"], ["t", "3B"], ["hr", "HR"], ["rbi", "RBI"], ["bb", "BB"], ["k", "K"], ["sb", "SB"], ["cs", "CS"], ["avg", "AVG", "", f3], ["obp", "OBP", "", f3], ["slg", "SLG", "", f3], ["ops", "OPS", "", f3]];
+    const PIT_COLS = [["name", "Player", "l"], ["team", "Tm", "l"], ["g", "G"], ["gs", "GS"], ["w", "W"], ["l", "L"], ["sv", "SV"], ["ip", "IP", "", null, "outs"], ["h", "H"], ["r", "R"], ["bb", "BB"], ["k", "K"], ["hr", "HR"], ["ra9", "RA/9", "", f2], ["whip", "WHIP", "", f2], ["k9", "K/9", "", f2], ["bb9", "BB/9", "", f2]];
+    const LOW = { ra9: 1, whip: 1, bb9: 1, name: 1, team: 1 };
+
+    function tabStats(el) {
+      const kind = view.statKind;
+      const phase = view.statPhase;
+      let rows;
+      let cols;
+      if (kind === "team") {
+        const tt = L.teamTotals(league, phase);
+        rows = league.teams.map((t, i) => ({ name: t.name, team: t.abbr, idx: i, w: league.rec[i].w, l: league.rec[i].l, rs: league.rec[i].rs, ra: league.rec[i].ra, ...(tt[i].bat ? { avg: tt[i].bat.avg, obp: tt[i].bat.obp, slg: tt[i].bat.slg, hr: tt[i].bat.hr, sb: tt[i].bat.sb, bk: tt[i].bat.k } : {}), ...(tt[i].pit ? { ra9: tt[i].pit.ra9, whip: tt[i].pit.whip, pk: tt[i].pit.k, pbb: tt[i].pit.bb, phr: tt[i].pit.hr } : {}) }));
+        cols = [["name", "Team", "l"], ["w", "W"], ["l", "L"], ["rs", "RS"], ["ra", "RA"], ["avg", "AVG", "", f3], ["obp", "OBP", "", f3], ["slg", "SLG", "", f3], ["hr", "HR"], ["sb", "SB"], ["bk", "K (bat)"], ["ra9", "RA/9", "", f2], ["whip", "WHIP", "", f2], ["pk", "K (pit)"], ["pbb", "BB (pit)"], ["phr", "HR (pit)"]];
+      } else {
+        rows = L.statRows(league, phase, kind).map((r) => ({ ...r, tm: r.team, team: league.teams[r.team].abbr }));
+        if (view.statTeam !== "all") rows = rows.filter((r) => r.tm === Number(view.statTeam));
+        if (!view.statAll && phase === "reg" && league.log.length) {
+          const games = (r) => league.rec[r.tm].w + league.rec[r.tm].l;
+          rows = rows.filter((r) => (kind === "bat" ? r.pa >= 1 : r.outs >= 1));
+          if (view.qualified) rows = rows.filter((r) => (kind === "bat" ? r.pa >= 3.1 * games(r) : r.outs >= 3 * games(r)));
+        }
+        cols = kind === "bat" ? BAT_COLS : PIT_COLS;
+      }
+      const sort = view.statSort && cols.some((c) => c[0] === view.statSort.k) ? view.statSort : { k: kind === "bat" ? "ops" : kind === "pit" ? "outs" : "w", dir: -1 };
+      const key = sort.k === "ip" ? "outs" : sort.k;
+      rows.sort((a, b) => {
+        const av = a[key];
+        const bv = b[key];
+        const c = typeof av === "string" ? String(av).localeCompare(bv) : (av || 0) - (bv || 0);
+        return c * sort.dir || String(a.name).localeCompare(b.name);
+      });
+      const limit = kind === "team" ? rows.length : 60;
+      el.innerHTML = `<div class="card"><div class="row">
+        <label>Table<select id="st-kind">${opt([["bat", "Batting"], ["pit", "Pitching"], ["team", "Teams"]], kind)}</select></label>
+        <label>Games<select id="st-phase">${opt([["reg", "Regular season"], ["post", "Postseason"]], phase)}</select></label>
+        ${kind !== "team" ? `<label>Team<select id="st-team">${opt([["all", "All teams"], ...league.teams.map((t, i) => [i, t.name])], view.statTeam)}</select></label>
+        <label class="inline"><input id="st-q" type="checkbox"${view.qualified ? " checked" : ""}> Qualified only</label>
+        <label class="inline"><input id="st-all" type="checkbox"${view.statAll ? " checked" : ""}> Show all rows</label>` : ""}</div>
+        <div class="scroll" style="margin-top:10px"><table><thead><tr>${cols.map((c) => `<th class="sort ${c[2] || ""}" data-k="${c[0]}">${c[1]}${sort.k === c[0] ? (sort.dir < 0 ? " ▼" : " ▲") : ""}</th>`).join("")}</tr></thead>
+        <tbody>${rows.slice(0, view.statAll ? rows.length : limit).map((r) => `<tr class="${r.tm === myIdx() || r.idx === myIdx() ? "mine" : ""}">${cols.map((c) => {
+          const v = r[c[0]];
+          const out = c[0] === "ip" ? r.ip : c[3] ? (v == null ? "-" : c[3](v)) : (v == null ? (c[0] === "name" ? "" : "-") : esc(v));
+          return `<td class="${c[2] || ""}">${out === undefined ? "" : out}</td>`;
+        }).join("")}</tr>`).join("") || `<tr><td colspan="${cols.length}" class="l mute">No stats yet. Sim some games.</td></tr>`}</tbody></table></div>
+        ${rows.length > limit && !view.statAll ? `<div class="note">Showing the top ${limit} of ${rows.length}. Tick "Show all rows" for the rest.</div>` : ""}
+        ${kind === "pit" ? `<div class="note">RA/9 counts all runs: the engine doesn't track earned runs. W/L/SV are approximated from the box score.</div>` : ""}</div>`;
+      const g = (id) => document.getElementById(id);
+      g("st-kind").addEventListener("change", (e) => { view.statKind = e.target.value; view.statSort = null; renderTab(); });
+      g("st-phase").addEventListener("change", (e) => { view.statPhase = e.target.value; renderTab(); });
+      if (g("st-team")) {
+        g("st-team").addEventListener("change", (e) => { view.statTeam = e.target.value; renderTab(); });
+        g("st-q").addEventListener("change", (e) => { view.qualified = e.target.checked; renderTab(); });
+        g("st-all").addEventListener("change", (e) => { view.statAll = e.target.checked; renderTab(); });
+      }
+      el.querySelectorAll("th.sort").forEach((th) => th.addEventListener("click", () => {
+        const k = th.dataset.k;
+        view.statSort = { k, dir: view.statSort && view.statSort.k === k ? -view.statSort.dir : (LOW[k] ? 1 : -1) };
+        renderTab();
+      }));
+    }
+
+    function tabLeaders(el) {
+      const cats = [
+        ["bat", "hr", "Home runs", (v) => v], ["bat", "rbi", "RBI", (v) => v], ["bat", "avg", "Batting average", f3], ["bat", "ops", "OPS", f3],
+        ["bat", "h", "Hits", (v) => v], ["bat", "sb", "Stolen bases", (v) => v], ["bat", "r", "Runs", (v) => v], ["bat", "bb", "Walks", (v) => v],
+        ["pit", "w", "Wins", (v) => v], ["pit", "k", "Strikeouts", (v) => v], ["pit", "ra9", "RA/9", f2], ["pit", "whip", "WHIP", f2],
+        ["pit", "sv", "Saves", (v) => v], ["pit", "k9", "K/9", f2]
+      ];
+      const phase = view.statPhase;
+      el.innerHTML = `<div class="card"><div class="row"><label>Games<select id="ld-phase">${opt([["reg", "Regular season"], ["post", "Postseason"]], phase)}</select></label></div></div>
+        <div class="grid3">${cats.map(([kind, stat, title, fmt]) => `<div class="card"><h2>${title}</h2><table>${L.leaders(league, phase, kind, stat, 10).map((r, i) => `<tr><td class="l">${i + 1}. ${esc(r.name)} <span class="mute">${esc(r.team)}</span></td><td><b>${fmt(r.v)}</b></td></tr>`).join("") || `<tr><td class="mute l">No data yet</td></tr>`}</table></div>`).join("")}</div>`;
+      document.getElementById("ld-phase").addEventListener("change", (e) => { view.statPhase = e.target.value; renderTab(); });
+    }
+
+    function tabPlayoffs(el) {
+      const po = league.po;
+      if (!po) {
+        el.innerHTML = `<div class="card"><h2>Playoff picture</h2>${league.settings.playoffs.enabled ? `<p class="mute">If the season ended today:</p>` : `<p class="mute">The postseason is turned off. The best record wins the title.</p>`}
+          ${league.settings.playoffs.enabled ? Object.entries(L.playoffSeeds(league)).map(([lg, ids]) => `<h3>${esc(lg)}</h3><ol>${ids.map((i) => `<li>${dot(i)}${esc(teamName(i))} <span class="mute">${league.rec[i].w}-${league.rec[i].l}</span></li>`).join("")}</ol>`).join("") : ""}</div>`;
+        return;
+      }
+      const seedOf = (i, s) => `${dot(i)}${esc(teamName(i))}`;
+      el.innerHTML = `<div class="card"><h2>Bracket</h2>${league.champion != null ? `<div class="champ">🏆 ${esc(teamName(league.champion))}</div>${po.finalText ? `<div class="mute">${esc(po.finalText)}</div>` : ""}` : ""}
+        <div class="grid3">${po.rounds.map((r, i) => `<div><h3>${r.final && Object.keys(po.slots).length > 1 ? "Championship" : `Round ${i + 1}`}</h3>${r.series.map((s) => `<div class="series ${s.winner != null ? "done" : ""}">
+          <div class="mute" style="font-size:11px">${esc(s.league)} · best of ${s.len}</div>
+          <div style="${s.winner === s.hi ? "font-weight:700" : ""}">${s.hiSeed < 99 && s.league !== "Final" ? `(${s.hiSeed}) ` : ""}${seedOf(s.hi)} <span style="float:right">${s.w[0]}</span></div>
+          <div style="${s.winner === s.lo ? "font-weight:700" : ""}">${s.league !== "Final" ? `(${s.loSeed}) ` : ""}${seedOf(s.lo)} <span style="float:right">${s.w[1]}</span></div></div>`).join("")}</div>`).join("")}</div></div>`;
+    }
+
+    function tabTeams(el) {
+      const ti = Math.min(view.teamIdx, league.teams.length - 1);
+      const t = league.teams[ti];
+      const bat = league.stats.reg.bat;
+      const pit = league.stats.reg.pit;
+      const brow = (p) => {
+        const r = bat[L.pkey(t, p)];
+        const d = r ? L.derivedBat(r) : null;
+        return `<tr><td class="l">${esc(p.name)}</td><td>${esc(p.pos)}</td><td>${esc(p.bats || "")}</td><td>${p.contact}</td><td>${p.power}</td><td>${p.eye}</td><td>${p.speed}</td><td>${p.arm}</td><td>${p.field}</td><td>${d ? d.g : 0}</td><td>${d ? f3(d.avg) : "-"}</td><td>${d ? d.hr : 0}</td><td>${d ? d.rbi : 0}</td><td>${d ? f3(d.ops) : "-"}</td></tr>`;
+      };
+      const prow = (p) => {
+        const r = pit[L.pkey(t, p)];
+        const d = r ? L.derivedPit(r) : null;
+        return `<tr><td class="l">${esc(p.name)}</td><td>${esc(p.role)}</td><td>${esc(p.throws || "")}</td><td>${p.velo}</td><td>${p.control}</td><td>${p.movement}</td><td>${p.stamina}</td><td>${d ? d.g : 0}</td><td>${d ? `${d.w}-${d.l}` : "-"}</td><td>${d ? d.sv : 0}</td><td>${d ? d.ip : "0.0"}</td><td>${d ? f2(d.ra9) : "-"}</td><td>${d ? d.k : 0}</td></tr>`;
+      };
+      const ro = t.roster;
+      el.innerHTML = `<div class="card"><div class="row"><label>Team<select id="tm-sel">${opt(league.teams.map((x, i) => [i, x.name]), ti)}</select></label>
+        <label>Name<input id="tm-name" type="text" value="${esc(t.name)}"></label><label>Abbr<input id="tm-abbr" type="text" value="${esc(t.abbr)}" style="width:60px"></label>
+        <label>Color<input id="tm-color" type="color" value="${esc(t.color)}"></label><label>Home park<select id="tm-park">${parkOpts(t.park)}</select></label>
+        <button id="tm-save">Save</button><button id="tm-my">${myIdx() === ti ? "This is my team" : "Make this my team"}</button></div>
+        <p class="note">${esc(t.league)} · ${esc(t.division)} · record ${league.rec[ti].w}-${league.rec[ti].l}</p></div>
+        <div class="card"><h2>Lineup</h2><div class="scroll"><table><thead><tr><th class="l">Player</th><th>Pos</th><th>B</th><th>CON</th><th>PWR</th><th>EYE</th><th>SPD</th><th>ARM</th><th>FLD</th><th>G</th><th>AVG</th><th>HR</th><th>RBI</th><th>OPS</th></tr></thead>
+          <tbody>${ro.lineup.map(brow).join("")}<tr><td class="l mute" colspan="14">Bench</td></tr>${ro.bench.map(brow).join("")}</tbody></table></div></div>
+        <div class="card"><h2>Pitching staff</h2><div class="scroll"><table><thead><tr><th class="l">Pitcher</th><th>Role</th><th>T</th><th>VEL</th><th>CTL</th><th>MOV</th><th>STA</th><th>G</th><th>W-L</th><th>SV</th><th>IP</th><th>RA/9</th><th>K</th></tr></thead>
+          <tbody>${ro.rotation.concat(ro.bullpen).map(prow).join("")}</tbody></table></div></div>`;
+      const g = (id) => document.getElementById(id);
+      g("tm-sel").addEventListener("change", (e) => { view.teamIdx = Number(e.target.value); renderTab(); });
+      g("tm-save").addEventListener("click", () => {
+        t.name = g("tm-name").value.trim() || t.name;
+        t.abbr = g("tm-abbr").value.trim() || t.abbr;
+        t.color = g("tm-color").value;
+        t.park = g("tm-park").value;
+        saveNow();
+        render();
+      });
+      g("tm-my").addEventListener("click", () => { league.settings.myTeam = ti; if (league.settings.control === "sim") league.settings.control = "hands"; saveNow(); render(); });
+    }
+
+    function tabHistory(el) {
+      const done = league.phase === "done";
+      el.innerHTML = `<div class="card"><h2>Past seasons</h2>${league.history.length ? `<table><thead><tr><th class="l">Season</th><th class="l">Champion</th><th class="l">Final</th></tr></thead><tbody>${league.history.map((h) => `<tr><td class="l">${esc(h.label)}</td><td class="l">${esc(h.champion || "-")}</td><td class="l mute">${esc(h.final || "")}</td></tr>`).join("")}</tbody></table>` : `<p class="mute">Nothing yet. Finish the season to start your history.</p>`}</div>
+        ${league.history.length ? `<div class="grid3">${league.history.slice().reverse().map((h) => `<div class="card"><h2>${esc(h.label)}</h2>${Object.entries({ hr: "HR", avg: "AVG", rbi: "RBI", w: "Wins", k: "K", ra9: "RA/9" }).map(([k, t]) => `<div class="mute">${t}: ${(h.leaders[k] || []).map((x) => `${esc(x.name)} ${k === "avg" ? f3(x.v) : k === "ra9" ? f2(x.v) : x.v}`).join(" · ")}</div>`).join("")}</div>`).join("")}</div>` : ""}
+        <div class="card"><h2>Next season</h2><p class="mute">Keeps every roster, clears the standings and stats, and builds a fresh schedule. Rosters do not age or change.</p>
+          <div class="row"><label>Season name<input id="ns-label" type="text" value="Season ${league.history.length + 2}" style="width:140px"></label><button class="primary" id="ns-go"${done ? "" : " disabled"}>Start next season</button></div>
+          ${done ? "" : `<p class="note">Available once the current season is complete.</p>`}</div>`;
+      const go = document.getElementById("ns-go");
+      go.addEventListener("click", () => {
+        L.nextSeason(league, { seasonLabel: document.getElementById("ns-label").value });
+        view.tab = "standings";
+        saveNow();
+        render();
+      });
+    }
+
+    function tabSettings(el) {
+      el.innerHTML = `<div class="card"><h2>League settings</h2>
+        <div class="row"><label>League name<input id="lg-name" type="text" value="${esc(league.name)}"></label>
+        <label>My team<select id="lg-my">${opt([["", "None"], ...league.teams.map((t, i) => [i, t.name])], league.settings.myTeam == null ? "" : league.settings.myTeam)}</select></label></div>
+        ${settingsHtml(league.settings, true)}
+        <p class="note">Schedule length, series length, rotation and roster sizes are fixed once a season is created. Everything else can change mid-season; ballpark, weather and innings apply from the next game.</p>
+        <div class="row" style="margin-top:10px"><button class="primary" id="lg-save">Save settings</button><button id="lg-export">Export league</button></div></div>`;
+      document.getElementById("lg-save").addEventListener("click", () => {
+        const s = readSettings(league.settings);
+        const my = document.getElementById("lg-my").value;
+        s.myTeam = my === "" ? null : Number(my);
+        if (s.myTeam === null && s.control === "hands") s.control = "all";
+        league.name = document.getElementById("lg-name").value || league.name;
+        league.settings = s;
+        saveNow();
+        render();
+      });
+      document.getElementById("lg-export").addEventListener("click", () => {
+        const blob = new Blob([JSON.stringify(league)], { type: "application/json" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `league-${league.id}.json`;
+        a.click();
+      });
+    }
+
+    window.addEventListener("focus", () => { if (league && !running) { importResult(); render(); } });
+    window.addEventListener("pagehide", () => { if (league) saveNow(); });
+    const last = localStorage.getItem("field-notes-league-current");
+    if (last && localStorage.getItem(LEAGUE_KEY(last)) && new URLSearchParams(location.search).get("open") !== "list") openLeague(last);
+    else renderList();
+  })();
+  </script>
+</body>
+</html>
