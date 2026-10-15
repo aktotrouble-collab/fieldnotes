@@ -59,6 +59,8 @@
     <div class="layout">
       <section class="card">
         <h2>Players</h2>
+        <div class="row"><button id="add-batter">Add batter</button><button id="add-pitcher">Add pitcher</button></div>
+        <p>Added players can be assigned to any MLB or fictional team, or kept unassigned. Teams automatically select their best lineup/staff from the pool when loaded into Exhibition or a new league. MLB assignments belong to the selected season. Resetting/deleting a team leaves its added players unassigned rather than deleting them. Existing leagues keep their rosters.</p>
         <label>Search players<input id="search" type="search" placeholder="Name, position or team"></label>
         <p id="player-count"></p>
         <div id="players"></div>
@@ -67,8 +69,9 @@
         <h2 id="player-heading">Select a player</h2>
         <form id="player-form" hidden>
           <div id="player-fields" class="grid"></div>
+          <label id="assignment-label" hidden>Assigned team<select id="player-team"></select></label>
           <p>Ratings: 0 minimum, no upper cap. VELO is a rating, not mph. Height is inches; weight is pounds.</p>
-          <div class="row"><button class="primary" type="submit">Save player</button><button type="button" id="reset-player">Reset player</button></div>
+          <div class="row"><button class="primary" type="submit">Save player</button><button type="button" id="reset-player">Reset player</button><button type="button" id="delete-player" class="danger" hidden>Delete added player</button></div>
         </form>
       </section>
     </div>
@@ -78,7 +81,12 @@
   <script src="players-data.js"></script>
   <script src="player-heights.js"></script>
   <script src="player-weights.js"></script>
+  <script src="player-bios.js"></script>
   <script src="game-engine.js"></script>
+  <script src="all-star.js"></script>
+  <script src="starting-contracts.js"></script>
+  <script src="starting-salaries.js"></script>
+  <script src="franchise.js"></script>
   <script src="league-engine.js"></script>
   <script src="customizations.js"></script>
   <script src="browser-dialog.js"></script>

@@ -1,9 +1,9 @@
 /* League / season engine for Field Notes. Builds teams, a schedule, simulates games with GameEngine,
    and tracks standings, player stats, playoffs and history. Everything is plain JSON so it can be saved. */
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('./game-engine.js'));
-  else root.LeagueEngine = factory(root.GameEngine);
-})(typeof self !== 'undefined' ? self : this, function (GE) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./game-engine.js'), require('./all-star.js'),require('./franchise.js'));
+  else root.LeagueEngine = factory(root.GameEngine, root.AllStar,root.Franchise);
+})(typeof self !== 'undefined' ? self : this, function (GE, AllStar,F) {
   'use strict';
 
   const clone = (v) => JSON.parse(JSON.stringify(v));
@@ -45,7 +45,8 @@
     parkMode: 'home', neutralPark: 'yankees', rest: 'normal', rotation: 5, bullpen: 7, bench: 5,
     weather: { mode: 'park', variation: 'steady', tempMode: 'park' },
     playoffs: { enabled: true, qualifiers: 6, roundLengths: [3, 5, 7, 7], reseed: false },
-    control: 'hands', myTeam: null, leagueNames: ['AL', 'NL'], seasonLabel: 'Season 1'
+    control: 'hands', myTeam: null, leagueNames: ['AL', 'NL'], seasonLabel: 'Season 1',
+    franchise:F.defaults(),festivities:{mode:'imported',game:true,derby:true,midpoint:0.5}
   });
 
   const mergeSettings = (o) => {
@@ -53,6 +54,8 @@
     const s = { ...d, ...(o || {}) };
     s.weather = { ...d.weather, ...((o && o.weather) || {}) };
     s.playoffs = { ...d.playoffs, ...((o && o.playoffs) || {}) };
+    s.franchise={...F.defaults(),...o?.franchise};
+    s.festivities={...d.festivities,...o?.festivities};
     return s;
   };
 
@@ -68,12 +71,12 @@
   };
 
   const toBatter = (p, pos) => ({
-    name: p.name, pos, bats: p.bats, throws: p.throws, contact: p.contact, power: p.power, eye: p.eye, speed: p.speed, arm: p.arm,
-    field: p.field, risk: p.risk, loft: p.loft, height: GE.playerHeight(p), weight: GE.playerWeight(p), heightManual: p.heightManual, weightManual: p.weightManual, customYear: p.customYear, mlb: p.id, natural: p.pos, alt: p.alt || []
+    name: p.name, age:GE.playerAge(p), birthDate:GE.playerBio(p)?.birthDate, pos, bats: p.bats, throws: p.throws, contact: p.contact, power: p.power, eye: p.eye, speed: p.speed, arm: p.arm,
+    field: p.field, risk: p.risk, loft: p.loft, height: GE.playerHeight(p), weight: GE.playerWeight(p), heightManual: p.heightManual, weightManual: p.weightManual, customYear: p.customYear, customPlayerId:p.customPlayerId, mlb: p.id, natural: p.pos, alt: p.alt || []
   });
   const toPitcher = (p, role) => ({
-    name: p.name, role, bats: p.bats, throws: p.throws, contact: p.contact, power: p.power, eye: p.eye, speed: p.speed,
-    arm: p.arm, field: p.field, risk: p.risk, loft: p.loft, velo: p.velo, control: p.control, movement: p.movement, stamina: p.stamina, height: GE.playerHeight(p), weight: GE.playerWeight(p), heightManual: p.heightManual, weightManual: p.weightManual, customYear: p.customYear, mlb: p.id
+    name: p.name, age:GE.playerAge(p), birthDate:GE.playerBio(p)?.birthDate, role, bats: p.bats, throws: p.throws, contact: p.contact, power: p.power, eye: p.eye, speed: p.speed,
+    arm: p.arm, field: p.field, risk: p.risk, loft: p.loft, velo: p.velo, control: p.control, movement: p.movement, stamina: p.stamina, height: GE.playerHeight(p), weight: GE.playerWeight(p), heightManual: p.heightManual, weightManual: p.weightManual, customYear: p.customYear, customPlayerId:p.customPlayerId, mlb: p.id
   });
 
   /* Best lineup, bench, rotation and bullpen from one real club's players. */
@@ -347,12 +350,13 @@
     const settings = mergeSettings(opts.settings);
     const seed = (opts.seed == null ? Math.floor(Math.random() * 4294967296) : opts.seed) >>> 0;
     const source = opts.source || 'generated';
+    if(settings.franchise.aging&&source==='mlb'&&!settings.franchise.fictionalMLB&&(!data||data.year!==settings.franchise.startYear))throw new Error('Real MLB rosters must match the selected franchise starting year.');
     const descriptors = opts.teams;
     if (!descriptors || descriptors.length < 2) throw new Error('A league needs at least two teams.');
     const teams = descriptors.map((d, i) => {
       let roster = d.roster ? rosterFromTeam(d.roster, settings) : null;
       if (!roster) {
-        if (source === 'mlb' && d.code && data) roster = mlbRoster(d.code, data, settings);
+        if (source === 'mlb' && d.code && data && !settings.franchise.fictionalMLB) roster = mlbRoster(d.code, data, settings);
         else roster = generatedRoster(d.name, ['balanced', 'sluggers', 'speed', 'pitching'][Math.floor(R(seed + i).next() * 4)], seed + i * 101, settings);
       }
       return {
@@ -367,7 +371,9 @@
       teams, schedule: [], day: 0, clock: 0, phase: 'regular', rec: teams.map(blankRec), stats: blankStats(),
       log: [], plog: [], po: null, champion: null, history: opts.history || [], seasonNo: (opts.history || []).length + 1
     };
-    league.schedule = buildSchedule(teams, settings, seed);
+    league.schedule = opts.schedule || buildSchedule(teams, settings, seed);
+    F.initialize(league);
+    AllStar.scheduleBreak(league);
     return league;
   }
 
@@ -377,6 +383,9 @@
     const entry = {
       label: league.settings.seasonLabel, champion: league.champion != null ? league.teams[league.champion].name : null,
       final: league.po && league.po.finalText || null,
+      allStar: clone(league.allStar || {}),
+      awards:clone(league.awards || []),year:league.franchise?.year,
+      franchise:league.franchise?{offseason:clone(league.franchise.offseason),development:clone(league.franchise.development)}:null,
       table: league.teams.map((t, i) => ({ name: t.name, league: t.league, division: t.division, w: league.rec[i].w, l: league.rec[i].l, rs: league.rec[i].rs, ra: league.rec[i].ra })),
       leaders: {
         hr: leaders(league, 'reg', 'bat', 'hr', 3), avg: leaders(league, 'reg', 'bat', 'avg', 3), rbi: leaders(league, 'reg', 'bat', 'rbi', 3),
@@ -388,15 +397,25 @@
   }
 
   function nextSeason(league, patch) {
-    league.history.push(archiveSeason(league));
+    const previous=archiveSeason(league);
+    F.prepareNext(league);
+    league.history.push(previous);
     const label = (patch && patch.seasonLabel) || `Season ${league.history.length + 1}`;
     league.settings.seasonLabel = label;
     league.seasonNo = league.history.length + 1;
     league.seed = (league.seed + 7919) >>> 0;
     if (patch && patch.rosters) patch.rosters.forEach((r, i) => { if (r) league.teams[i].roster = r; });
     league.teams.forEach((t) => { t.rot = 0; t.pst = {}; });
-    league.schedule = buildSchedule(league.teams, league.settings, league.seed);
+    if (!league.scheduleImport) {
+      league.schedule = buildSchedule(league.teams, league.settings, league.seed);
+      delete league.festivitiesCalendar;
+    }
     Object.assign(league, { day: 0, clock: 0, phase: 'regular', rec: league.teams.map(blankRec), stats: blankStats(), log: [], plog: [], po: null, champion: null });
+    delete league.allStar;
+    delete league.awards;
+    league.todayDone={};
+    if(league.franchise?.year)league.settings.seasonLabel=`${league.franchise.year} Season`;
+    AllStar.scheduleBreak(league);
     return league;
   }
 
@@ -501,7 +520,7 @@
     const s = league.settings;
     return {
       away: prepareTeam(league, ref.away, rng), home: prepareTeam(league, ref.home, rng), park: parkFor(league, ref, rng),
-      seed, innings: s.innings, ghost: s.ghost, weather: clone(s.weather)
+      seed, innings: s.innings, ghost: s.ghost, weather: { ...clone(s.weather), date:dateOf(league, league.clock) }
     };
   }
 
@@ -546,6 +565,15 @@
     };
   }
   const pick = (obj, keys) => { const o = {}; for (const k of keys) o[k] = (obj && obj[k]) || 0; return o; };
+  function accumulate(row,values,team) {
+    if(row.team!==team&&!row.stints)row.stints={[row.team]:Object.fromEntries(Object.entries(row).filter(([key,value])=>key!=='team'&&typeof value==='number'))};
+    const stint=row.stints&&(row.stints[team]||={});
+    for(const [key,value]of Object.entries(values)) {
+      row[key]=(row[key]||0)+value;
+      if(stint)stint[key]=(stint[key]||0)+value;
+    }
+    row.team=team;
+  }
 
   function applyResult(league, ref, ex) {
     const post = !!ref.post;
@@ -557,18 +585,12 @@
       for (const b of side.bat) {
         const key = pkey(team, b);
         const row = phase.bat[key] || (phase.bat[key] = { name: b.name, team: ti, g: 0 });
-        row.g += 1;
-        for (const f of BAT_KEYS) row[f] = (row[f] || 0) + (b.stat[f] || 0);
+        accumulate(row,{g:1,...pick(b.stat,BAT_KEYS)},ti);
       }
       for (const p of side.pit) {
         const key = pkey(team, p);
         const row = phase.pit[key] || (phase.pit[key] = { name: p.name, team: ti, g: 0 });
-        row.g += 1;
-        row.gs = (row.gs || 0) + (p.gs ? 1 : 0);
-        row.w = (row.w || 0) + (p.dec === 'W' ? 1 : 0);
-        row.l = (row.l || 0) + (p.dec === 'L' ? 1 : 0);
-        row.sv = (row.sv || 0) + (p.dec === 'S' ? 1 : 0);
-        for (const f of PIT_KEYS) row[f] = (row[f] || 0) + (p.stat[f] || 0);
+        accumulate(row,{g:1,gs:p.gs?1:0,w:p.dec==='W'?1:0,l:p.dec==='L'?1:0,sv:p.dec==='S'?1:0,...pick(p.stat,PIT_KEYS)},ti);
         const u = team.pst[key];
         team.pst[key] = { d: league.clock, pc: p.stat.pc, streak: u && league.clock - u.d === 1 ? u.streak + 1 : 1 };
       }
@@ -722,6 +744,7 @@
   function finishSeason(league, champIdx) {
     league.phase = 'done';
     league.champion = champIdx;
+    F.finalizeAwards(league);
     if (league.po) {
       const fin = league.po.rounds.length ? league.po.rounds[league.po.rounds.length - 1].series[0] : null;
       if (fin && fin.winner != null) {
@@ -742,7 +765,7 @@
       const day = league.schedule[league.day] || [];
       day.forEach(([away, home], k) => {
         const id = `${league.seasonNo}.${league.day}.${k}`;
-        if (!(league.todayDone && league.todayDone[id])) out.push({ id, away, home, post: false });
+        if (!(league.todayDone && league.todayDone[id])) out.push({ id, away, home, post: false, ...(league.scheduleImport?.gameInfo?.[league.day]?.[k] || {}) });
       });
     } else if (league.phase === 'playoffs' && league.po) {
       const round = league.po.rounds[league.po.rounds.length - 1];
@@ -766,16 +789,20 @@
   }
 
   function recordRef(league, ref, ex) {
+    if(league.todayDone?.[ref.id]||league.log.some(r=>r.id===ref.id)||league.plog.some(r=>r.id===ref.id))throw new Error('This game result has already been recorded.');
     const row = applyResult(league, ref, ex);
     (league.todayDone = league.todayDone || {})[ref.id] = 1;
     if (ref.series) league.todayDone[ref.series.id] = 1;
+    F.afterGame(league,ref,ex);
     return row;
   }
 
   /* Closes out the day once every game is in: advances the date, the series, and the phase. */
   function closeDayIfDone(league) {
-    if (pendingGames(league).length) return false;
+    if(league.phase==='done')return false;
+    if (pendingGames(league).length || AllStar.pending(league).length) return false;
     league.todayDone = {};
+    F.dayEnd(league);
     league.clock += 1;
     if (league.phase === 'regular') {
       league.day += 1;
@@ -785,22 +812,29 @@
       for (const s of round.series) if (s.winner == null) s.winner = seriesWinner(s);
       if (round.series.every((s) => s.winner != null)) nextRound(league);
     }
+    F.dayStart(league);
     return true;
   }
 
   /* Plays today's games, skipping any the caller wants to hold (e.g. the user's own game). */
   function simDay(league, hold) {
+    if(league.phase==='done')return {held:[],advanced:false};
+    F.dayStart(league);
     const refs = pendingGames(league);
     const held = [];
     for (const ref of refs) {
       if (hold && hold(ref)) held.push(ref);
       else simRef(league, ref);
     }
+    for (const ref of AllStar.pending(league)) {
+      if (hold && hold(ref)) held.push(ref);
+      else AllStar.simulate(league,ref,extract);
+    }
     const advanced = held.length ? false : closeDayIfDone(league);
     return { held, advanced };
   }
 
-  const holdFor = (league) => (ref) => league.settings.control === 'hands' && league.settings.myTeam != null && (ref.away === league.settings.myTeam || ref.home === league.settings.myTeam);
+  const holdFor = (league) => (ref) => ref.event ? league.settings.control !== 'sim' : league.settings.control === 'hands' && league.settings.myTeam != null && (ref.away === league.settings.myTeam || ref.home === league.settings.myTeam);
 
   function dateOf(league, day) {
     const d = new Date(`${league.settings.startDate}T12:00:00Z`);
@@ -821,16 +855,19 @@
     return { ...r, ip: ipText(r.outs), ra9: div(r.r * 27, r.outs), whip: div((r.h + r.bb) * 3, r.outs), k9: div(r.k * 27, r.outs), bb9: div(r.bb * 27, r.outs) };
   }
 
-  function statRows(league, phase, kind) {
+  function statRows(league, phase, kind,teamIdx) {
     const map = league.stats[phase][kind];
     const fn = kind === 'bat' ? derivedBat : derivedPit;
-    return Object.keys(map).map((key) => ({ key, ...fn(map[key]) }));
+    return Object.keys(map).filter(key=>teamIdx==null||map[key].stints?.[teamIdx]||map[key].team===teamIdx).map(key=>{
+      const row=map[key];
+      const zeros=Object.fromEntries(Object.entries(row).filter(([field,value])=>field!=='team'&&typeof value==='number').map(([field])=>[field,0]));
+      return {key,...fn(teamIdx!=null&&row.stints?{...row,...zeros,...row.stints[teamIdx],team:teamIdx}:row)};
+    });
   }
 
   const LOW_IS_BETTER = { ra9: 1, whip: 1, bb9: 1 };
   function leaders(league, phase, kind, stat, n, teamIdx) {
-    let rows = statRows(league, phase, kind);
-    if (teamIdx != null) rows = rows.filter((r) => r.team === teamIdx);
+    let rows = statRows(league, phase, kind,teamIdx);
     if (phase === 'reg' && ['avg', 'obp', 'slg', 'ops', 'ra9', 'whip', 'k9', 'bb9'].includes(stat)) {
       rows = rows.filter((r) => {
         const games = league.rec[r.team].w + league.rec[r.team].l;
@@ -843,11 +880,11 @@
 
   function teamTotals(league, phase) {
     const out = league.teams.map(() => ({ bat: {}, pit: {} }));
-    for (const r of statRows(league, phase, 'bat')) {
+    for(let team=0;team<league.teams.length;team++)for (const r of statRows(league, phase, 'bat',team)) {
       const o = out[r.team].bat;
       for (const k of BAT_KEYS) o[k] = (o[k] || 0) + (r[k] || 0);
     }
-    for (const r of statRows(league, phase, 'pit')) {
+    for(let team=0;team<league.teams.length;team++)for (const r of statRows(league, phase, 'pit',team)) {
       const o = out[r.team].pit;
       for (const k of PIT_KEYS) o[k] = (o[k] || 0) + (r[k] || 0);
     }

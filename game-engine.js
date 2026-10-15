@@ -17,6 +17,18 @@
   const motion = typeof module !== 'undefined' && module.exports ? require('./fielding-motion.js') : root.FieldingMotion;
   const listedHeights = typeof module !== 'undefined' && module.exports ? require('./player-heights.js') : root.MLB_HEIGHTS;
   const listedWeights = typeof module !== 'undefined' && module.exports ? require('./player-weights.js') : root.MLB_WEIGHTS;
+  const listedBios = typeof module !== 'undefined' && module.exports ? require('./player-bios.js') : root.MLB_BIOS;
+  const playerBio = player => {
+    const bio=listedBios && listedBios[player.mlb || player.id];
+    return player.birthDate ? {...bio,birthDate:player.birthDate} : bio || null;
+  };
+  function playerAge(player, date) {
+    if(Number.isFinite(player.age)&&!date)return player.age;
+    const bio=playerBio(player);
+    if(!bio)return Number.isFinite(player.age)?player.age:null;
+    const reference=date || `${player.customYear || new Date().getFullYear()}-07-01`;
+    return Number(reference.slice(0,4))-Number(bio.birthDate.slice(0,4))-(reference.slice(5)<bio.birthDate.slice(5)?1:0);
+  }
   const playerHeight = (player) => {
     const listed = listedHeights && listedHeights[player.mlb || player.id];
     if (listed && !player.heightManual) return listed;
@@ -238,6 +250,25 @@
     rockies: 68, tigers: 67, phillies: 73, mets: 71, diamondbacks: 90, orioles: 70
   };
 
+  function seasonalClimate(park, date) {
+    const info = parkEnv(park);
+    const coastal = ['angels', 'dodgers', 'padres', 'giants', 'mariners'];
+    const warm = ['marlins', 'rays', 'astros', 'diamondbacks', 'rangers'];
+    const amplitude = coastal.includes(park.id) ? 12 : warm.includes(park.id) ? 22 : 38;
+    const parsed = /^\d{4}-\d{2}-\d{2}$/.test(date || '') ? new Date(`${date}T12:00:00Z`) : null;
+    if (!parsed || !Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0,10) !== date) throw new Error('Weather requires a valid game date (YYYY-MM-DD).');
+    const offsets = [-1, -0.9, -0.65, -0.35, -0.05, 0.1, 0.15, 0.1, -0.1, -0.4, -0.65, -0.9];
+    const month = parsed.getUTCMonth();
+    const days = new Date(Date.UTC(parsed.getUTCFullYear(), month + 1, 0)).getUTCDate();
+    const fraction = (parsed.getUTCDate() - 1) / days;
+    const offset = offsets[month] * (1 - fraction) + offsets[(month + 1) % 12] * fraction;
+    return {
+      temp: (PARK_TEMP[park.id] || 70) + amplitude * offset,
+      mph: info.mph * (1.05 - 0.15 * Math.cos((month + fraction - 6) * Math.PI / 6)),
+      date
+    };
+  }
+
   function parkEnv(park) {
     if (typeof require === 'function' && !root.PARK_ENV) {
       try { require('./park-walls.js'); } catch (error) { /* no weather data */ }
@@ -265,6 +296,8 @@
   function makeEnv(park, weather, rng) {
     const w = weather || {};
     const info = parkEnv(park);
+    const date = w.date || new Date().toISOString().slice(0, 10);
+    const climate = seasonalClimate(park, date);
     const alt = Number.isFinite(Number(w.altitude)) && w.altitude !== '' && w.altitude !== null && w.altitude !== undefined ? Number(w.altitude) : info.alt;
     const indoors = info.roof === 'dome' || (info.roof === 'retractable' && w.roof !== 'open');
     const tmode = ['fixed', 'random', 'park'].includes(w.tempMode) ? w.tempMode : 'standard';
@@ -272,9 +305,11 @@
     if (tmode === 'fixed') temp = Number.isFinite(Number(w.temp)) && w.temp !== '' && w.temp !== null ? Number(w.temp) : REF_TEMP_F;
     else if (indoors) temp = 72;
     else if (tmode === 'random') temp = Math.round(rng.between(40, 100));
-    else if (tmode === 'park') temp = Math.round(clamp((PARK_TEMP[park.id] || 70) + 9 * rng.gauss(), 30, 110));
+    else if (tmode === 'park') temp = Math.round(climate.temp + 9 * rng.gauss());
     const env = {
       alt,
+      date,
+      climate,
       temp,
       rho: airDensity(alt) * tempFactor(temp),
       cf: info.cf,
@@ -299,7 +334,7 @@
       env.base = { speed: rng.between(0, 20), from: rng.between(0, 360) };
     } else if (env.mode === 'park') {
       const from = rng.chance(0.25) ? rng.between(0, 360) : (info.from + 55 * rng.gauss() + 360) % 360;
-      env.base = { speed: clamp(info.mph * (1 + 0.55 * rng.gauss()), 0, 35), from };
+      env.base = { speed: clamp((env.climate ? env.climate.mph : info.mph) * (1 + 0.55 * rng.gauss()), 0, 35), from };
     } else env.base = { speed: 0, from: 0 };
   }
 
@@ -2610,6 +2645,10 @@
     if (g.over) return null;
     if (g.needStart) startHalf(g);
     if (!g.pa) startPA(g);
+    if (g.derby) {
+      if (!g.pa.queued) g.pa.queued = { type:'FB', mph:65, x:0, z:2.5, d:0, hand:'R' };
+      return g.pa.queued;
+    }
     if (aim) g.pa.queued = userPitch(g, g.pa.pitcher, aim);
     else if (!g.pa.queued) g.pa.queued = throwPitch(g, g.pa.pitcher, g.pa.batter);
     return g.pa.queued;
@@ -2635,7 +2674,7 @@
     } else {
       pitch = pa.queued || throwPitch(g, pitcher, batter);
       pa.queued = null;
-      swing = manual || autoSwing(g, batter, pitcher, pitch);
+      swing = manual || (opts.derby ? { swing:true, timing:primeContactTiming(batter,pitcher,pitch)+rng.gauss()*14, loc:Math.abs(rng.gauss())*0.55, offset:{ x:rng.gauss()*0.6,z:-0.7+rng.gauss()*0.9 }, power:true } : autoSwing(g, batter, pitcher, pitch));
       pitcher.stat.pc += 1;
       pa.pitches += 1;
       g.pitches += 1;
@@ -2689,6 +2728,16 @@
       return flight;
     };
     const isFair = (c) => { const f = flightOf(c); return f.fair || f.pole; };
+    if (opts.derby) {
+      const contact = ballInPlay || foulBall;
+      const ball = contact ? flightOf(contact) : null;
+      if (ball) markTouch(ball, () => flightOf(contact,{ noFence:true }));
+      g.count = { balls:0,strikes:0 };
+      pitcher.stat.pc = 0;
+      event.ball = ball;
+      event.call = ball ? (ball.hr ? 'home run' : ball.fair ? 'in play' : 'foul') : swing.swing ? 'swinging strike' : 'taken pitch';
+      return event;
+    }
     if (!(held && held.stage === 'ff')) {
       if (ballInPlay && !isFair(ballInPlay)) {
         foulBall = ballInPlay;
@@ -4209,8 +4258,8 @@
   }
 
   const GameEngine = {
-    PARK_LIST, POSITIONS, STYLES, PITCH_TYPES, DEFAULT_MIX, pitchSpread, ZONE, PITCH_RADIUS, TIMING_WINDOW, LOC_WINDOW, manualSwingProfile, primeContactTiming, playerHeight, playerWeight,
-    settings, parkById, fenceAt, boundaryAt, wallAt, flightSim, parkEnv, makeEnv, windNow, windText, windVector, airDensity, tempFactor, PARK_TEMP, defaultSpot, shiftedSpot, setShift, SHIFT_PRESETS,
+    PARK_LIST, POSITIONS, STYLES, PITCH_TYPES, DEFAULT_MIX, pitchSpread, ZONE, PITCH_RADIUS, TIMING_WINDOW, LOC_WINDOW, manualSwingProfile, primeContactTiming, playerHeight, playerWeight, playerAge, playerBio,
+    settings, parkById, fenceAt, boundaryAt, wallAt, flightSim, parkEnv, seasonalClimate, makeEnv, windNow, windText, windVector, airDensity, tempFactor, PARK_TEMP, defaultSpot, shiftedSpot, setShift, SHIFT_PRESETS,
     createGame, validateTeam, stepPitch, nextPitch, playHeldContact, completeContact, completeLive, reviewLive, resumeSteal, challengeCall, pendingReview,
     simPlateAppearance, simHalfInning, simGame, stealOdds, canSteal,
     snapshot, boxScore, sprayChartEntries, generateTeam, makeRng, contactWord, currentBatter, currentPitcher, batSide,

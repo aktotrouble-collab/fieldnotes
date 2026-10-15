@@ -68,16 +68,27 @@
   <script src="players-data.js"></script>
   <script src="player-heights.js"></script>
   <script src="player-weights.js"></script>
+  <script src="player-bios.js"></script>
   <script src="fielding-motion.js"></script>
   <script src="game-engine.js"></script>
+  <script src="all-star.js"></script>
+  <script src="starting-contracts.js"></script>
+  <script src="starting-salaries.js"></script>
+  <script src="minor-league-prospects.js"></script>
+  <script src="franchise.js"></script>
   <script src="league-engine.js"></script>
   <script src="customizations.js"></script>
   <script src="browser-dialog.js"></script>
+  <script src="mlb-schedule.js"></script>
+  <script src="franchise-ui.js"></script>
   <script>
   (() => {
     const L = window.LeagueEngine;
     const GE = window.GameEngine;
     const C = window.Customizations;
+    const M = window.MLBSchedule;
+    const A = window.AllStar;
+    const F = window.Franchise;
     const $app = document.getElementById("app");
     const INDEX_KEY = "field-notes-league-index-v1";
     const LEAGUE_KEY = (id) => `field-notes-league-${id}`;
@@ -131,7 +142,56 @@
     function importResult() {
       let res;
       try { res = JSON.parse(localStorage.getItem(RESULT_KEY)); } catch (e) { res = null; }
-      if (!res || !league || res.leagueId !== league.id) return;
+      if (!res || !league || res.leagueId !== league.id) {
+        if (league) {
+          try {
+            const progress = JSON.parse(localStorage.getItem(PENDING_KEY));
+            const ref = progress?.leagueId === league.id && ['derby','allstar'].includes(progress.event) && A.pending(league).find(r=>r.id === progress.refId && r.event === progress.event);
+            if (ref) {
+              const event = A.ensure(league,ref.index);
+              if (ref.event === 'derby') {
+                if (JSON.stringify(event.derby.entrants) !== JSON.stringify(progress.allStarEvent.derby.entrants)) throw new Error('Saved Derby participants do not match this league.');
+                event.derby = progress.allStarEvent.derby;
+              } else if (progress.setupSaved) {
+                event.gameConfig = progress.config;
+                event.teams = [progress.config.away,progress.config.home];
+              }
+              if (!saveNow()) throw new Error('Could not save All-Star progress.');
+              return true;
+            }
+          } catch (error) { alert(`Couldn't restore All-Star progress: ${error.message}`); }
+        }
+        return;
+      }
+      if (res.event === 'allstar' || res.event === 'derby') {
+        try {
+          const pending = A.pending(league).find(ref=>ref.id === res.refId && ref.event === res.event);
+          if (!pending) return;
+          if (res.event === 'allstar') {
+            const event = A.ensure(league,pending.index);
+            if (res.config) {
+              event.gameConfig = res.config;
+              event.teams = [res.config.away,res.config.home];
+            }
+            A.finishGame(league,pending,res.ex);
+          }
+          else {
+            const current = A.ensure(league,pending.index);
+            if (!res.derby || res.derby.champion === null) throw new Error('Incomplete Derby result.');
+            if (JSON.stringify(current.derby.entrants) !== JSON.stringify(res.derby.entrants)) throw new Error('Derby participants no longer match this league.');
+            current.derby = res.derby;
+          }
+          if (!saveNow()) throw new Error('Could not save the All-Star result.');
+          localStorage.removeItem(RESULT_KEY);
+          localStorage.removeItem(PENDING_KEY);
+          L.closeDayIfDone(league);
+          saveNow();
+          return true;
+        } catch (error) {
+          alert(`Couldn't import All-Star result: ${error.message}`);
+          return;
+        }
+      }
       const ref = L.pendingGames(league).find((r) => r.id === res.refId);
       localStorage.removeItem(RESULT_KEY);
       localStorage.removeItem(PENDING_KEY);
@@ -229,6 +289,7 @@
     function settingsHtml(s, locked) {
       const dis = locked ? " disabled" : "";
       const w = s.weather;
+      const f={...F.defaults(),...s.franchise},a=s.festivities||{mode:"imported",game:true,derby:true,midpoint:0.5};
       return `
       <div class="row">
         <label>Season name<input id="s-label" type="text" value="${esc(s.seasonLabel)}" style="width:130px"></label>
@@ -249,13 +310,14 @@
       </div>
       <h3>Weather</h3>
       <div class="row">
-        <label>Wind<select id="w-mode">${opt([["calm", "Calm"], ["park", "Weighted to the park"], ["random", "Random"], ["fixed", "I set it"]], w.mode)}</select></label>
+        <label>Wind<select id="w-mode">${opt([["calm", "Calm"], ["park", "Weighted to park and game date"], ["random", "Random"], ["fixed", "I set it"]], w.mode)}</select></label>
         <label>Wind behaviour<select id="w-var">${opt([["steady", "Steady"], ["gusty", "Gusty"], ["inning", "Shifts each inning"]], w.variation)}</select></label>
         <label>Wind mph<input id="w-speed" type="number" min="0" value="${w.speed || 0}"></label>
         <label>Wind from (deg)<input id="w-from" type="number" value="${w.from || 0}"></label>
-        <label>Temperature<select id="w-tmode">${opt([["standard", "Standard 70°F"], ["park", "Typical for the park"], ["random", "Random 40-100"], ["fixed", "I set it"]], w.tempMode)}</select></label>
+        <label>Temperature<select id="w-tmode">${opt([["standard", "Standard 70°F"], ["park", "Weighted to park and game date"], ["random", "Random 40-100"], ["fixed", "I set it"]], w.tempMode)}</select></label>
         <label>Temp °F<input id="w-temp" type="number" value="${w.temp == null ? 70 : w.temp}"></label>
       </div>
+      <p class="note">Park-weighted weather uses a seasonal climate model for each game's calendar date, not actual historical weather. Closed roofs stay at 72°F with no wind.</p>
       <h3>Playoffs</h3>
       <div class="row">
         <label class="inline"><input id="p-on" type="checkbox"${s.playoffs.enabled ? " checked" : ""}> Play postseason</label>
@@ -264,6 +326,36 @@
         <label class="inline"><input id="p-reseed" type="checkbox"${s.playoffs.reseed ? " checked" : ""}> Reseed each round</label>
       </div>
       <p class="note">Top seeds get a bye when the field isn't a power of two. The last length is used for the championship series.</p>
+      <h3>All-Star festivities &amp; awards</h3>
+      <div class="row">
+        <label>All-Star break<select id="f-fest"${dis}>${opt([["imported","Use imported MLB break (if any)"],["midpoint","Add a midseason break to any schedule"],["off","No All-Star break"]],a.mode)}</select></label>
+        <label class="inline"><input id="f-asg" type="checkbox"${a.game?" checked":""}${dis}> All-Star Game</label>
+        <label class="inline"><input id="f-derby" type="checkbox"${a.derby?" checked":""}${dis}> Home Run Derby</label>
+        <label>Break placement (% of calendar)<input id="f-midpoint" type="number" min="10" max="90" value="${Math.round(a.midpoint*100)}"${dis}></label>
+        <label class="inline"><input id="f-awards" type="checkbox"${f.awards?" checked":""}> Season awards</label>
+        <label class="inline"><input id="f-fun" type="checkbox"${f.funAwards?" checked":""}> Fictional bonus awards</label>
+      </div>
+      <p class="note">Any team count and season length are supported. Two league groups use league-vs-league selections; otherwise balanced Stars / Stripes rosters are drawn from the whole league. Disabled events are skipped. Award methods and approximations are shown on the Awards tab.</p>
+      <h3>Franchise, injuries &amp; transactions</h3>
+      <div class="row">
+        <label class="inline"><input id="f-aging" type="checkbox"${f.aging?" checked":""}${dis}> Aging / franchise league</label>
+        <label>Starting year<input id="f-year" type="number" min="1901" max="9990" value="${f.startYear}"${dis}></label>
+        <label class="inline"><input id="f-fictional" type="checkbox"${f.fictionalMLB?" checked":""}${dis}> Fill MLB teams with fictional players</label>
+        <label class="inline"><input id="f-injuries" type="checkbox"${f.injuries?" checked":""}> Injuries / MLB injured lists</label>
+        <label>Injury frequency (1–10)<input id="f-risk" type="number" min="1" max="10" value="${f.injuryRisk}"></label>
+        <label class="inline"><input id="f-trades" type="checkbox"${f.trades?" checked":""}> CPU trades / commissioner veto</label>
+        <label class="inline"><input id="f-picks" type="checkbox"${f.tradePicks?" checked":""}> Tradable draft picks (fictional rule)</label>
+        <label class="inline"><input id="f-auto" type="checkbox"${f.autoManage?" checked":""}> Auto-manage my team's recovery / free agency</label>
+      </div>
+      <div class="row">
+        <label>Base payroll budget ($m)<input id="f-budget" type="number" min="1" value="${f.budget/1e6}"${dis}></label>
+        <label class="inline"><input id="f-tax" type="checkbox"${f.luxuryTax?" checked":""}> Luxury tax (no hard cap)</label>
+        <label>Tax threshold ($m)<input id="f-threshold" type="number" min="1" value="${f.taxThreshold/1e6}"></label>
+        <label>Tax rate (%)<input id="f-tax-rate" type="number" min="0" value="${f.taxRate*100}"></label>
+        <label>Draft rounds<input id="f-rounds" type="number" min="1" max="20" value="${f.draftRounds}"${dis}></label>
+        <label>Trade deadline (% of calendar)<input id="f-deadline" type="number" min="1" max="99" value="${Math.round(f.tradeDeadline*100)}"${dis}></label>
+      </div>
+      <p class="note">Aging uses only the starting season's player data. With real MLB rosters, that roster season is the starting year. Notable historical MiLB graduates are included for 2015 and 2016; other starting years use generated prospects. Their hidden potential uses later MLB peak performance retrospectively, not contemporary scouting reports. Later years have generated calendars, development, drafts and contracts—never later real-world player imports. CPU trades have one calendar day for a commissioner veto; multi-day simulation can pass that window. The farm system has no minor-league game schedule. See Franchise Guide for financial and roster-rule simplifications.</p>
       <h3>Playing games</h3>
       <div class="row">
         <label>Control<select id="s-control">${opt([["hands", "Hands-on: I play my team's games"], ["all", "Sim everything, play any game I choose"], ["sim", "Sim only"]], s.control)}</select></label>
@@ -279,6 +371,8 @@
         s.seriesLength = Math.max(1, Number(g("s-series").value) || 3);
         s.emphasis = g("s-emph").value;
         s.startDate = g("s-start").value || s.startDate;
+      }
+      if (!g("s-rot").disabled) {
         s.rotation = Math.max(1, Number(g("s-rot").value) || 5);
         s.bullpen = Math.max(1, Number(g("s-pen").value) || 7);
         s.bench = Math.max(2, Number(g("s-bench").value) || 5);
@@ -292,6 +386,16 @@
       const lens = g("p-len").value.split(/[ ,]+/).map(Number).filter((n) => n >= 1);
       s.playoffs = { enabled: g("p-on").checked, qualifiers: Math.max(1, Number(g("p-q").value) || 1), roundLengths: lens.length ? lens : [3, 5, 7, 7], reseed: g("p-reseed").checked };
       s.control = g("s-control").value;
+      const f={...F.defaults(),...s.franchise};
+      const readNumber=(id,min,max)=>{const n=Number(g(id).value);if(!Number.isFinite(n)||n<min||n>max)throw new Error(`Invalid ${g(id).closest("label").textContent.trim()}.`);return n;};
+      if(!g("f-aging").disabled) {
+        f.aging=g("f-aging").checked;f.startYear=readNumber("f-year",1901,9990);
+        f.fictionalMLB=g("f-fictional").checked;f.budget=readNumber("f-budget",1,1000000)*1e6;
+        f.draftRounds=readNumber("f-rounds",1,20);f.tradeDeadline=readNumber("f-deadline",1,99)/100;
+        s.festivities={mode:g("f-fest").value,game:g("f-asg").checked,derby:g("f-derby").checked,midpoint:readNumber("f-midpoint",10,90)/100};
+      }
+      Object.assign(f,{awards:g("f-awards").checked,funAwards:g("f-fun").checked,injuries:g("f-injuries").checked,injuryRisk:readNumber("f-risk",1,10),trades:g("f-trades").checked,tradePicks:g("f-picks").checked,autoManage:g("f-auto").checked,luxuryTax:g("f-tax").checked,taxThreshold:readNumber("f-threshold",1,1000000)*1e6,taxRate:readNumber("f-tax-rate",0,1000)/100});
+      s.franchise=f;
       return s;
     }
 
@@ -315,12 +419,27 @@
           <div class="scroll"><table id="team-table"></table></div>
           ${savedHtml}
           <h3>Settings</h3>${settingsHtml(d.settings, false)}
+          <h3>Real MLB schedule (optional)</h3>
+          <div class="row"><label>Schedule source<select id="d-schedule-source"><option value="generated">Generate a schedule</option><option value="mlb"${d.scheduleSource === "mlb" ? " selected" : ""}>Import an MLB season</option></select></label>
+          <label>Schedule year<input id="d-schedule-year" type="number" min="1901" max="${new Date().getFullYear()+1}" value="${d.scheduleYear || d.year || latestYear}"></label></div>
+          <p class="note">Requires all 30 MLB clubs exactly once, with no extra teams. Downloads MLB's regular-season calendar: actual dates, off-days, doubleheaders and home/away matchups. Postponed/cancelled placeholders are omitted; completed makeups are included. Replaces generated game counts, series settings and start date. Requires internet; roster season and schedule year may differ. Special-site games still use the ballpark setting above.</p>
           <div class="row" style="margin-top:14px"><button class="primary" id="d-create">Create league</button><button id="d-cancel">Cancel</button></div>
           <div class="err" id="d-err"></div>
         </div>`;
       drawTeamTable();
       const g = (id) => document.getElementById(id);
       g("d-cancel").addEventListener("click", () => { draft = null; renderList(); });
+      g("d-schedule-source").addEventListener("change", event => {
+        d.scheduleSource = event.target.value;
+        scheduleControls();
+      });
+      g("d-schedule-year").addEventListener("input", event => { d.scheduleYear = Number(event.target.value); });
+      function scheduleControls() {
+        const imported = g("d-schedule-source").value === "mlb";
+        g("d-schedule-year").disabled = !imported;
+        for (const id of ["s-games","s-series","s-emph","s-start"]) g(id).disabled = imported;
+      }
+      scheduleControls();
       g("d-name").addEventListener("input", (e) => { d.name = e.target.value; });
       g("d-seed").addEventListener("input", (e) => { d.seed = e.target.value; });
       if (d.source === "mlb") g("d-year").addEventListener("change", (e) => { d.year = Number(e.target.value); d.settings.startDate = `${d.year}-03-26`; g("s-start").value = d.settings.startDate; fillDraftTeams(d); drawTeamTable(); });
@@ -374,45 +493,69 @@
       sel.value = on.some((t) => t.name === cur) ? cur : (draft.mySaved || "");
     }
 
-    function createFromDraft() {
+    async function createFromDraft() {
       const d = draft;
       const err = document.getElementById("d-err");
       err.textContent = "";
       const on = d.teams.filter((t) => t.on);
       if (on.length < 2) { err.textContent = "Pick at least two teams."; return; }
       if (new Set(on.map((t) => t.name)).size !== on.length) { err.textContent = "Team names must be different."; return; }
-      const settings = readSettings(d.settings);
+      let settings;
+      try { settings=readSettings(d.settings); } catch(error){err.textContent=error.message;return;}
+      if(d.source==="mlb"&&!settings.franchise.fictionalMLB)settings.franchise.startYear=d.year;
+      if(settings.franchise.aging)settings.startDate=`${settings.franchise.startYear}-03-26`;
+      const importSchedule = document.getElementById("d-schedule-source").value === "mlb";
+      if(settings.franchise.aging&&importSchedule&&Number(document.getElementById("d-schedule-year").value)!==settings.franchise.startYear){err.textContent="Use the selected starting year's schedule in an aging league.";return;}
+      if(settings.franchise.aging&&on.some(t=>t.roster&&[...t.roster.lineup,...t.roster.bench,...t.roster.pitchers].some(p=>typeof p.mlb==="number"&&(p.customYear||t.roster.src?.year||t.roster.year)!==settings.franchise.startYear))){err.textContent="Saved real-player rosters must use the selected starting year. Choose matching rosters or fictional players.";return;}
+      const createButton = document.getElementById("d-create");
+      createButton.disabled = true;
+      let imported = null;
+      if (importSchedule) {
+        const button = document.getElementById("d-create");
+        button.disabled = true;
+        err.textContent = "Downloading MLB schedule…";
+        try {
+          imported = await M.load(Number(document.getElementById("d-schedule-year").value), on);
+          if (draft !== d) return;
+        } catch (error) {
+          err.textContent = `Couldn't import MLB schedule: ${error.message}. No league was created.`;
+          button.disabled = false;
+          return;
+        }
+      }
       const myName = document.getElementById("d-my").value;
       settings.myTeam = myName ? on.findIndex((t) => t.name === myName) : null;
       if (settings.myTeam === null && settings.control === "hands") settings.control = "all";
       settings.leagueNames = [...new Set(on.map((t) => t.league))];
       if ((on.length * settings.gamesPerTeam) % 2) err.textContent = "Odd team count with odd games: one club will play a game fewer. Continuing.\n";
       const make = () => {
+        if (draft !== d) return;
         try {
           const seed = d.seed === "" ? undefined : Number(d.seed);
           const lg = L.createLeague({
-            name: d.name || "My League", source: d.source, year: d.source === "mlb" ? d.year : null, seed, settings,
+            name: d.name || "My League", source: d.source, year: d.source === "mlb" ? d.year : null, seed, settings, schedule: imported && imported.schedule,
             teams: on.map((t) => ({ code: t.code, name: t.name.trim(), abbr: t.abbr.trim() || t.name.slice(0, 3).toUpperCase(), color: t.color, park: t.park, league: t.league.trim() || "A", division: t.division.trim() || "East", roster: t.roster ? C.applyRoster(t.roster, { ...window.MLB_SEASONS, [latestYear]:window.MLB_PLAYERS }, latestYear, true) : null }))
-          }, d.source === "mlb" ? seasonData(d.year) : null);
+          }, d.source === "mlb"&&!settings.franchise.fictionalMLB ? seasonData(d.year) : null);
+          if (imported) M.apply(lg, imported);
           league = lg;
           draft = null;
           view = { ...view, tab: "standings", schedDay: null, teamIdx: settings.myTeam != null ? settings.myTeam : 0 };
           saveNow();
           render();
-        } catch (e) { err.textContent = String(e.message || e); }
+        } catch (e) { err.textContent = String(e.message || e); createButton.disabled = false; }
       };
-      const years = new Set([...(d.source === "mlb" ? [d.year] : []), ...on.flatMap(t => t.roster ? [t.roster.src?.year, t.roster.year, ...[...t.roster.lineup, ...t.roster.bench, ...t.roster.pitchers].map(p => p.customYear)] : [])].filter(Boolean));
+      const years = new Set([...(d.source === "mlb"&&!settings.franchise.fictionalMLB ? [d.year] : []), ...on.flatMap(t => t.roster ? [t.roster.src?.year, t.roster.year, ...[...t.roster.lineup, ...t.roster.bench, ...t.roster.pitchers].map(p => p.customYear)] : [])].filter(Boolean));
       if (!years.size) return make();
       err.textContent += "Loading player data…";
       let remaining = years.size, failed = false;
       for (const year of years) loadSeason(year, ok => {
-        if (!ok) { failed = true; err.textContent = `Couldn't load ${year} player data.`; }
+        if (!ok) { failed = true; createButton.disabled = false; err.textContent = `Couldn't load ${year} player data.`; }
         if (--remaining === 0 && !failed) make();
       });
     }
 
     /* ------------------------------------------------------------ league */
-    const TABS = [["standings", "Standings"], ["schedule", "Schedule"], ["stats", "Stats"], ["leaders", "Leaders"], ["playoffs", "Playoffs"], ["teams", "Teams"], ["history", "History"], ["settings", "Settings"]];
+    const TABS = [["standings", "Standings"], ["schedule", "Schedule"], ["allstar", "All-Star Festivities"], ["franchise","Franchise"],["il","Injured List"],["trades","Trades"],["awards","Awards"],["offseason","Offseason"],["stats", "Stats"], ["leaders", "Leaders"], ["playoffs", "Playoffs"], ["teams", "Teams"], ["history", "History"], ["settings", "Settings"]];
     const teamName = (i) => league.teams[i].name;
     const dot = (i) => `<span class="dot" style="background:${esc(league.teams[i].color)}"></span>`;
     const myIdx = () => league.settings.myTeam;
@@ -478,11 +621,14 @@
       const mode = league.settings.control;
       const hold = L.holdFor(league);
       if (league.phase === "done") { el.innerHTML = ""; return; }
-      const label = (r) => `${dot(r.away)}${esc(teamName(r.away))} <span class="mute">at</span> ${dot(r.home)}${esc(teamName(r.home))}`;
+      const label = (r) => `${dot(r.away)}${esc(teamName(r.away))} <span class="mute">at</span> ${dot(r.home)}${esc(teamName(r.home))}${refs.filter(g => g.away === r.away && g.home === r.home).length > 1 || r.number > 1 ? ` <span class="pill">Game ${r.number || 1}</span>` : ""}`;
       const rows = refs.filter((r) => mode === "all" || hold(r) || false);
-      el.innerHTML = rows.length ? `<h3>Today's games</h3>${rows.map((r) => `
+      const events = A.pending(league);
+      el.innerHTML = (rows.length ? `<h3>Today's games</h3>${rows.map((r) => `
         <div class="game-row"><div class="teams">${label(r)}${r.post ? `<span class="pill">Playoffs</span>` : ""}</div>
-        ${mode !== "sim" ? `<button class="small primary" data-play="${r.id}">Play</button>` : ""}<button class="small" data-sim="${r.id}">Sim</button></div>`).join("")}` : "";
+        ${mode !== "sim" ? `<button class="small primary" data-play="${r.id}">Play</button>` : ""}<button class="small" data-sim="${r.id}">Sim</button></div>`).join("")}` : "")
+        + (events.length ? `<h3>All-Star break</h3>${events.map(ref=>`<div class="game-row"><div class="teams">${ref.event === "derby" ? "Home Run Derby" : "All-Star Game"}</div><button data-fest-view>Play / simulate event</button></div>`).join("")}` : "");
+      el.querySelectorAll("[data-fest-view]").forEach(button=>button.addEventListener("click",()=>{ view.tab="allstar";render(); }));
       el.querySelectorAll("[data-play]").forEach((b) => b.addEventListener("click", () => playGame(b.dataset.play)));
       el.querySelectorAll("[data-sim]").forEach((b) => b.addEventListener("click", () => {
         const ref = L.pendingGames(league).find((r) => r.id === b.dataset.sim);
@@ -528,19 +674,26 @@
       const tick = () => {
         const t0 = performance.now();
         let blocked = false;
+        let failure = "";
         while (!finished() && !stopFlag && performance.now() - t0 < 120) {
-          const res = L.simDay(league, hold);
-          if (res.held.length) { blocked = true; break; }
+          try {
+            const res = L.simDay(league, hold);
+            if (res.held.length) { blocked = true; break; }
+          } catch (error) {
+            failure = error.message;
+            break;
+          }
         }
         document.getElementById("prog").style.width = `${Math.min(100, (league.phase === "regular" ? league.day / totalDays : 1) * 100)}%`;
         msg.textContent = `${L.dateOf(league, league.clock)} · ${league.log.length} games played`;
-        if (!finished() && !stopFlag && !blocked) { setTimeout(tick, 0); return; }
+        if (!finished() && !stopFlag && !blocked && !failure) { setTimeout(tick, 0); return; }
         running = false;
-        if (blocked) msg.textContent = "Your game is ready. Play it or sim it above.";
+        if (blocked) msg.textContent = "Your game or All-Star event is ready. Play it or sim it above.";
         saveNow();
         render();
         const m = document.getElementById("sim-msg");
-        if (m && blocked) m.textContent = "Your game is ready. Play it or sim it above.";
+        if (m && blocked) m.textContent = "Your game or All-Star event is ready. Play it or sim it above.";
+        if (m && failure) m.textContent = `Simulation paused: ${failure}`;
       };
       setTimeout(tick, 0);
     }
@@ -548,7 +701,90 @@
     /* -------------------------------------------------------------- tabs */
     function renderTab() {
       const el = document.getElementById("tab");
-      ({ standings: tabStandings, schedule: tabSchedule, stats: tabStats, leaders: tabLeaders, playoffs: tabPlayoffs, teams: tabTeams, history: tabHistory, settings: tabSettings }[view.tab])(el);
+      ({ standings: tabStandings, schedule: tabSchedule, allstar:tabAllStar,franchise:tabFranchise,il:tabIL,trades:tabTrades,awards:tabAwards,offseason:tabOffseason, stats: tabStats, leaders: tabLeaders, playoffs: tabPlayoffs, teams: tabTeams, history: tabHistory, settings: tabSettings }[view.tab])(el);
+    }
+
+    function tabAllStar(el) {
+      const calendar = A.calendar(league);
+      const showDerby=league.settings.festivities?.derby!==false,showGame=league.settings.festivities?.game!==false;
+      const pool = A.rankings(league);
+      const festivalOptions = (kind,selected) => pool[kind].map(entry=>`<option value="${esc(entry.key)}"${entry.key === selected ? " selected" : ""}>${esc(entry.player.name)} · ${esc(teamName(entry.team))}</option>`).join("");
+      if (!calendar.length) {
+        el.innerHTML = `<div class="card"><h2>All-Star Festivities</h2><p class="note">No festivities are scheduled. At league creation, choose a midseason break for any schedule, or use an imported MLB All-Star break.</p></div>`;
+        return;
+      }
+      el.innerHTML = calendar.map(date=>{
+        const event = league.allStar?.[date.index];
+        const available = A.pending(league).filter(ref=>ref.index === date.index);
+        const dateText = L.dateOf(league,date.day);
+        if (!event && league.day > date.day) return `<div class="card"><h2>All-Star break · ${esc(dateText)}</h2><p class="note">This league already passed the break before festivities were enabled. Events will be available next season; no games have been backdated.</p></div>`;
+        if (!event && league.day < date.derbyDay) return `<div class="card"><h2>All-Star break · ${esc(dateText)}</h2><p>${showDerby?`Home Run Derby: ${esc(L.dateOf(league,date.derbyDay))}`:""}${showGame?` · All-Star Game: ${esc(dateText)}`:""}</p><p class="note">Participants will be selected at the break using your league's season performance. Ratings break ties or fill missing statistics. ${date.inferred ? "Break dates inferred from this legacy imported calendar." : ""}</p></div>`;
+        const current = event || A.ensure(league,date.index);
+        const derby = current.derby;
+        const participant = i=>esc(derby.entrants[i].player.name);
+        const bracket = derby.matches.map(m=>`<tr><td class="l">${["Quarterfinal","Semifinal","Final"][m.round]}</td><td class="l">${participant(m.a)} vs ${participant(m.b)}</td><td>${A.totals(m.turns[0]).hr}–${A.totals(m.turns[1]).hr}</td><td class="l">${m.winner === null ? "Pending" : participant(m.winner)}</td></tr>`).join("");
+        return `<div class="card"><h2>All-Star Festivities · ${esc(dateText)}</h2><p>${esc(current.venue)} · field: ${esc(GE.parkById(current.park).name)}</p>
+          <p class="note">Automatic selections use league performance at the break. Override participants below before playing. Events do not affect regular-season standings, stats, rotation or fatigue. Derby: eight seeds by season HR, then power; 10 swings each per matchup. Ties use up to three extra swings each, then longest homer. If still tied, alternating one-swing rounds continue until one hitter hits a longer homer in the same round. Both hitters always get a swing; no seed-based winner.</p>
+          <section${showDerby?"":" hidden"}><h3>Home Run Derby · ${esc(L.dateOf(league,date.derbyDay))}</h3>
+          ${derby.champion !== null ? `<p class="champ">${participant(derby.champion)} wins the Home Run Derby!</p>` : ""}
+          <div class="scroll"><table><tr><th class="l">Seed</th><th class="l">Entrant</th><th class="l">Club</th><th>Season HR</th></tr>${derby.entrants.map((p,i)=>`<tr><td class="l">${i+1}</td><td class="l">${esc(p.player.name)}</td><td class="l">${esc(teamName(p.team))}</td><td>${p.stats.hr || 0}</td></tr>`).join("")}</table></div>
+          ${!derby.matches.some(m=>m.turns.some(t=>t.length)) ? `<details data-derby-edit="${date.index}"><summary>Override Derby entrants / seeds</summary><p class="note">Choose any eight different league hitters. Seed order sets the bracket. Locked after the first swing.</p>${derby.entrants.map((p,i)=>`<label>Seed ${i+1}<select data-derby-pick="${i}" aria-label="Derby seed ${i+1}">${festivalOptions("bat",p.key)}</select></label>`).join("")}<button data-save-derby="${date.index}">Save Derby selections</button></details>` : ""}
+          <div class="scroll"><table style="margin-top:10px"><tr><th class="l">Round</th><th class="l">Matchup</th><th>HR</th><th class="l">Winner</th></tr>${bracket}</table></div>
+          </section><section${showGame?"":" hidden"}><h3>All-Star Game · ${esc(dateText)}</h3>
+          ${current.gameConfig ? `<p class="note">Custom game setup: ${esc(GE.parkById(current.gameConfig.park).name)} · ${esc(current.gameConfig.weather.date)} · ${current.gameConfig.innings} innings.</p>` : ""}
+          ${current.game ? `<p class="champ">${esc(current.teams[0].name)} ${current.game.score[0]} – ${current.game.score[1]} ${esc(current.teams[1].name)}</p>` : `<p>${esc(current.teams[0].name)} at ${esc(current.teams[1].name)} · ${current.gameConfig?.innings || 9} innings · Full Exhibition-style setup available when playing.</p>`}
+          <div class="grid2">${current.teams.map(t=>`<div><h3>${esc(t.name)}</h3><p>${t.lineup.map(p=>`${esc(p.name)} (${esc(p.pos)})`).join(" · ")}</p><p class="note">Bench: ${t.bench.map(p=>esc(p.name)).join(", ")}<br>Pitchers: ${t.pitchers.map(p=>esc(p.name)).join(", ")}</p></div>`).join("")}</div>
+          ${!current.game ? `<details data-allstar-edit="${date.index}"><summary>Override All-Star rosters</summary><p class="note">Any league hitter or pitcher can join either side. Each player may appear only once. Starting slots set positions; batting order and player details can also be edited in game setup. Choose “None” to remove a bench player or reliever.</p><div class="grid2">${current.teams.map((t,side)=>`<div data-allstar-side="${side}"><h3>${esc(t.name)}</h3>${["lineup","bench","pitchers"].map(kind=>t[kind].map((p,i)=>`<label>${kind === "lineup" ? [...GE.POSITIONS,"DH"][i] : kind === "bench" ? "Bench "+(i+1) : i === 0 ? "Starting pitcher" : "Reliever "+i}<select data-as-kind="${kind}" aria-label="${side === 0 ? "Away" : "Home"} ${kind} ${i+1}">${kind !== "lineup" && !(kind === "pitchers" && i === 0) ? '<option value="">None</option>' : ""}${festivalOptions(kind === "pitchers" ? "pit" : "bat",L.pkey(null,p))}</select></label>`).join("")).join("")}</div>`).join("")}</div><button data-save-allstar="${date.index}">Save All-Star selections</button></details>` : ""}
+          </section>${available.map(ref=>`<div class="row"><b>${ref.event === "derby" ? "Home Run Derby" : "All-Star Game"}</b><button class="primary" data-fest-play="${ref.id}">Play event</button><button data-fest-sim="${ref.id}">Simulate event</button></div>`).join("")}
+          ${showGame&&!current.game && league.day < date.day && (derby.champion !== null||!showDerby) ? `<p class="note">Advance to ${esc(dateText)} for the All-Star Game.</p>` : ""}
+          <div class="err" id="fest-error-${date.index}" role="status"></div></div>`;
+      }).join("");
+      el.querySelectorAll("[data-fest-sim]").forEach(button=>button.addEventListener("click",()=>festival(button.dataset.festSim,false)));
+      el.querySelectorAll("[data-fest-play]").forEach(button=>button.addEventListener("click",()=>festival(button.dataset.festPlay,true)));
+      el.querySelectorAll("[data-save-derby], [data-save-allstar]").forEach(button=>button.addEventListener("click",()=>{
+        const derby = button.hasAttribute("data-save-derby");
+        const index = Number(derby ? button.dataset.saveDerby : button.dataset.saveAllstar);
+        try {
+          const editor = button.closest("details");
+          if (derby) A.overrideDerby(league,index,[...editor.querySelectorAll("[data-derby-pick]")].map(select=>select.value));
+          else A.overrideTeams(league,index,[...editor.querySelectorAll("[data-allstar-side]")].map(side=>Object.fromEntries(["lineup","bench","pitchers"].map(kind=>[kind,[...side.querySelectorAll(`[data-as-kind="${kind}"]`)].map(select=>select.value).filter(Boolean)]))));
+          const pending = JSON.parse(localStorage.getItem(PENDING_KEY));
+          if (pending?.leagueId === league.id && pending.index === index && pending.event === (derby ? "derby" : "allstar")) localStorage.removeItem(PENDING_KEY);
+          if (!saveNow()) throw new Error("Couldn't save participant overrides.");
+          render();
+        } catch (error) { document.getElementById(`fest-error-${index}`).textContent=error.message; }
+      }));
+    }
+
+    function festival(id, play) {
+      const ref = A.pending(league).find(r=>r.id === id);
+      if (!ref || running) return;
+      try {
+        const event = A.ensure(league,ref.index);
+        if (!play) {
+          A.simulate(league,ref,L.extract);
+          if (!saveNow()) throw new Error("Couldn't save All-Star results.");
+          L.closeDayIfDone(league);
+          saveNow();
+          render();
+          return;
+        }
+        const cfg = A.config(league,ref);
+        const pending = {
+          leagueId:league.id,refId:ref.id,event:ref.event,index:ref.index,config:cfg,
+          label:ref.event === "derby" ? "Home Run Derby" : `${cfg.away.name} at ${cfg.home.name}`,
+          colors:["#2b6fa6","#d27637"],abbrs:[cfg.away.group,cfg.home.group],my:0,
+          allStarEvent:event
+        };
+        if (!saveNow()) throw new Error("Couldn't save All-Star selections.");
+        localStorage.setItem(PENDING_KEY,JSON.stringify(pending));
+        location.href="game.html?league=1";
+      } catch (error) {
+        saveNow();
+        const status = document.getElementById(`fest-error-${ref.index}`);
+        if (status) status.textContent = error.message;
+        else alert(error.message);
+      }
     }
 
     function tabStandings(el) {
@@ -574,7 +810,9 @@
         return `<div class="game-row"><div class="teams"><span style="${aw ? "font-weight:700" : ""}">${dot(away)}${esc(teamName(away))} ${r.sa}</span> &nbsp; <span style="${aw ? "" : "font-weight:700"}">${dot(home)}${esc(teamName(home))} ${r.sh}</span>${r.inn > league.settings.innings ? `<span class="pill">F/${r.inn}</span>` : ""}
           <div class="detail">${r.w ? `W: ${esc(r.w)}` : ""}${r.l ? ` · L: ${esc(r.l)}` : ""}${r.sv ? ` · SV: ${esc(r.sv)}` : ""}${r.hr.length ? ` · HR: ${esc(r.hr.join(", "))}` : ""} · H ${r.ha}-${r.hh} · E ${r.ea}-${r.eh}</div></div></div>`;
       }
-      return `<div class="game-row"><div class="teams">${dot(away)}${esc(teamName(away))} <span class="mute">at</span> ${dot(home)}${esc(teamName(home))}</div></div>`;
+      const game = league.scheduleImport?.gameInfo[day]?.[k];
+      const doubleheader = league.schedule[day].filter(([a,h]) => a === away && h === home).length > 1;
+      return `<div class="game-row"><div class="teams">${dot(away)}${esc(teamName(away))} <span class="mute">at</span> ${dot(home)}${doubleheader ? ` <span class="pill">Game ${game?.number || 1}</span>` : ""}</div></div>`;
     }
 
     let logCache = null;
@@ -595,7 +833,8 @@
         const day = view.schedDay == null ? Math.min(league.day, league.schedule.length - 1) : view.schedDay;
         const games = league.schedule[day] || [];
         body = `<div class="row" style="align-items:center"><button class="small" id="d-prev">&larr;</button><b>${esc(L.dateOf(league, day))}</b> <span class="mute">day ${day + 1} of ${league.schedule.length}</span><button class="small" id="d-next">&rarr;</button><button class="small" id="d-today">Current day</button></div>
-          ${games.map(([a, h], k) => dayRowHtml(day, k, a, h)).join("") || `<p class="mute">No games.</p>`}`;
+          ${A.calendar(league).filter(date=>date.derbyDay === day || date.day === day).map(date=>`<p><strong>${[league.settings.festivities?.derby!==false&&date.derbyDay===day?"Home Run Derby":"",league.settings.festivities?.game!==false&&date.day===day?"All-Star Game":""].filter(Boolean).join(" / ")}</strong> · See All-Star Festivities to play or simulate.</p>`).join("")}
+          ${games.map(([a, h], k) => dayRowHtml(day, k, a, h)).join("") || `<p class="mute">No regular-season games.</p>`}`;
       } else {
         const t = Number(team);
         const rows = [];
@@ -616,7 +855,34 @@
           return `<tr><td class="l">${esc(L.dateOf(league, x.d))}</td><td class="l">${home ? "vs" : "@"} ${dot(opp)}${esc(teamName(opp))}</td><td>${res}</td><td class="l mute">${esc(pit)}</td></tr>`;
         }).join("")}</tbody></table></div>`;
       }
-      el.innerHTML = `<div class="card"><div class="row"><label>View<select id="sch-team">${opt(opts, team)}</select></label></div><div style="margin-top:10px">${body}</div></div>`;
+      el.innerHTML = `<div class="card"><div class="row"><label>View<select id="sch-team">${opt(opts, team)}</select></label></div>
+        ${league.scheduleImport ? `<p class="note">Imported ${league.scheduleImport.year} MLB regular season: ${league.scheduleImport.totalGames} games, ${esc(league.scheduleImport.startDate)} through ${esc(league.scheduleImport.endDate)}. Source: MLB Stats API. Roster season: ${league.year || "custom"}. Special-site games use your league's ballpark setting.</p>` : ""}
+        <details style="margin-top:12px"><summary>Import an MLB season schedule</summary>
+          <p class="note">All 30 MLB clubs are required. Available only before any games are played or days advanced. Replaces the current calendar, including start date, off-days, doubleheaders and home/away assignments. Scheduled All-Star Games include a Home Run Derby the previous day, playable or simulated with league-performance selections. Completed makeups replace postponed/cancelled placeholders. Requires internet.</p>
+          <div class="row"><label>Schedule year<input id="sch-import-year" type="number" min="1901" max="${new Date().getFullYear()+1}" value="${league.scheduleImport?.year || league.year || latestYear}"></label>
+          <button id="sch-import"${running || league.log.length || league.clock || league.day || league.phase !== "regular" ? " disabled" : ""}>Import MLB schedule</button></div>
+          <div id="sch-import-status" class="err" role="status"></div>
+        </details><div style="margin-top:10px">${body}</div></div>`;
+      document.getElementById("sch-import").addEventListener("click", async () => {
+        const target = league;
+        const button = document.getElementById("sch-import");
+        const status = document.getElementById("sch-import-status");
+        try {
+          M.teamMap(target.teams);
+          if (!await window.BrowserDialog.confirm("Replace this unplayed league's schedule with the selected MLB season calendar? Rosters will not change.")) return;
+          button.disabled = true;
+          status.textContent = "Downloading MLB schedule…";
+          const imported = await M.load(Number(document.getElementById("sch-import-year").value), target.teams);
+          if (league !== target || running) throw new Error("The league changed or simulation started while downloading. Try again before playing any games.");
+          M.apply(target, imported);
+          view.schedDay = null;
+          if (!saveNow()) throw new Error("Could not save the imported schedule to browser storage.");
+          render();
+        } catch (error) {
+          status.textContent = `Couldn't import schedule: ${error.message}`;
+          button.disabled = false;
+        }
+      });
       document.getElementById("sch-team").addEventListener("change", (e) => { view.schedTeam = e.target.value; renderTab(); });
       const prev = document.getElementById("d-prev");
       if (prev) {
@@ -641,8 +907,7 @@
         rows = league.teams.map((t, i) => ({ name: t.name, team: t.abbr, idx: i, w: league.rec[i].w, l: league.rec[i].l, rs: league.rec[i].rs, ra: league.rec[i].ra, ...(tt[i].bat ? { avg: tt[i].bat.avg, obp: tt[i].bat.obp, slg: tt[i].bat.slg, hr: tt[i].bat.hr, sb: tt[i].bat.sb, bk: tt[i].bat.k } : {}), ...(tt[i].pit ? { ra9: tt[i].pit.ra9, whip: tt[i].pit.whip, pk: tt[i].pit.k, pbb: tt[i].pit.bb, phr: tt[i].pit.hr } : {}) }));
         cols = [["name", "Team", "l"], ["w", "W"], ["l", "L"], ["rs", "RS"], ["ra", "RA"], ["avg", "AVG", "", f3], ["obp", "OBP", "", f3], ["slg", "SLG", "", f3], ["hr", "HR"], ["sb", "SB"], ["bk", "K (bat)"], ["ra9", "RA/9", "", f2], ["whip", "WHIP", "", f2], ["pk", "K (pit)"], ["pbb", "BB (pit)"], ["phr", "HR (pit)"]];
       } else {
-        rows = L.statRows(league, phase, kind).map((r) => ({ ...r, tm: r.team, team: league.teams[r.team].abbr }));
-        if (view.statTeam !== "all") rows = rows.filter((r) => r.tm === Number(view.statTeam));
+        rows = L.statRows(league, phase, kind,view.statTeam==="all"?undefined:Number(view.statTeam)).map((r) => ({ ...r, tm: r.team, team: league.teams[r.team].abbr }));
         if (!view.statAll && phase === "reg" && league.log.length) {
           const games = (r) => league.rec[r.tm].w + league.rec[r.tm].l;
           rows = rows.filter((r) => (kind === "bat" ? r.pa >= 1 : r.outs >= 1));
@@ -783,15 +1048,28 @@
       g("tm-my").addEventListener("click", () => { league.settings.myTeam = ti; if (league.settings.control === "sim") league.settings.control = "hands"; saveNow(); render(); });
     }
 
+    const franchisePanel=(tab,el)=>window.FranchiseUI.render(tab,league,el,view,saveNow,render);
+    const tabFranchise=el=>franchisePanel("franchise",el);
+    const tabIL=el=>franchisePanel("il",el);
+    const tabTrades=el=>franchisePanel("trades",el);
+    const tabAwards=el=>franchisePanel("awards",el);
+    const tabOffseason=el=>franchisePanel("offseason",el);
     function tabHistory(el) {
       const done = league.phase === "done";
       el.innerHTML = `<div class="card"><h2>Past seasons</h2>${league.history.length ? `<table><thead><tr><th class="l">Season</th><th class="l">Champion</th><th class="l">Final</th></tr></thead><tbody>${league.history.map((h) => `<tr><td class="l">${esc(h.label)}</td><td class="l">${esc(h.champion || "-")}</td><td class="l mute">${esc(h.final || "")}</td></tr>`).join("")}</tbody></table>` : `<p class="mute">Nothing yet. Finish the season to start your history.</p>`}</div>
         ${league.history.length ? `<div class="grid3">${league.history.slice().reverse().map((h) => `<div class="card"><h2>${esc(h.label)}</h2>${Object.entries({ hr: "HR", avg: "AVG", rbi: "RBI", w: "Wins", k: "K", ra9: "RA/9" }).map(([k, t]) => `<div class="mute">${t}: ${(h.leaders[k] || []).map((x) => `${esc(x.name)} ${k === "avg" ? f3(x.v) : k === "ra9" ? f2(x.v) : x.v}`).join(" · ")}</div>`).join("")}</div>`).join("")}</div>` : ""}
-        <div class="card"><h2>Next season</h2><p class="mute">Keeps every roster, clears the standings and stats, and builds a fresh schedule. Rosters do not age or change.</p>
+        <div class="card"><h2>Next season</h2><p class="mute">${F.settings(league).aging?"Complete the staged Offseason dashboard before beginning the next generated season. Aging, contracts, health and prospects carry forward.":"Keeps every roster, clears the standings and stats, and builds a fresh schedule. Rosters do not age or change."}</p>
           <div class="row"><label>Season name<input id="ns-label" type="text" value="Season ${league.history.length + 2}" style="width:140px"></label><button class="primary" id="ns-go"${done ? "" : " disabled"}>Start next season</button></div>
           ${done ? "" : `<p class="note">Available once the current season is complete.</p>`}</div>`;
       const go = document.getElementById("ns-go");
+      if (league.history.some(h=>Object.keys(h.allStar || {}).length)) {
+        const events = document.createElement("div");
+        events.className = "card";
+        events.innerHTML = `<h2>Past All-Star Festivities</h2>${league.history.map(h=>Object.values(h.allStar || {}).map(event=>`<p><b>${esc(h.label)}</b> · Derby: ${event.derby.champion === null ? "unfinished" : esc(event.derby.entrants[event.derby.champion].player.name)}${event.game ? ` · ${esc(event.teams[0].name)} ${event.game.score[0]}–${event.game.score[1]} ${esc(event.teams[1].name)}` : ""}</p>`).join("")).join("")}`;
+        el.append(events);
+      }
       go.addEventListener("click", () => {
+        if(F.settings(league).aging){view.tab="offseason";render();return;}
         L.nextSeason(league, { seasonLabel: document.getElementById("ns-label").value });
         view.tab = "standings";
         saveNow();
@@ -800,11 +1078,11 @@
     }
 
     function tabSettings(el) {
-      el.innerHTML = `<div class="card"><h2>League settings</h2>
+      el.innerHTML = `<div class="card" data-no-memory><h2>League settings</h2>
         <div class="row"><label>League name<input id="lg-name" type="text" value="${esc(league.name)}"></label>
         <label>My team<select id="lg-my">${opt([["", "None"], ...league.teams.map((t, i) => [i, t.name])], league.settings.myTeam == null ? "" : league.settings.myTeam)}</select></label></div>
         ${settingsHtml(league.settings, true)}
-        <p class="note">Schedule length, series length, rotation and roster sizes are fixed once a season is created. Everything else can change mid-season; ballpark, weather and innings apply from the next game.</p>
+        <p class="note">Schedule length, festivities placement, aging, starting year, draft size and roster sizes are fixed at creation. Injury frequency, trades and other enabled controls can change mid-season; ballpark, weather and innings apply from the next game.</p>
         <div class="row" style="margin-top:10px"><button class="primary" id="lg-save">Save settings</button><button id="lg-export">Export league</button><button id="lg-customization">Update customization</button></div>
         <p class="note">Update customization refreshes current players' attributes and team details from this browser's saved defaults. Roster assignments, results, standings, schedules and accumulated statistics stay intact. Changes apply to future games only.</p><div id="custom-status" role="status"></div></div>`;
       document.getElementById("lg-customization").disabled = running;
@@ -836,12 +1114,16 @@
         });
       });
       document.getElementById("lg-save").addEventListener("click", () => {
-        const s = readSettings(league.settings);
+        let s;
+        try{s=readSettings(league.settings);}catch(error){document.getElementById("custom-status").textContent=error.message;return;}
+        if(!league.franchise&&F.enabled({...league,settings:s})&&JSON.parse(localStorage.getItem(PENDING_KEY))?.leagueId===league.id){document.getElementById("custom-status").textContent="Finish the pending game before enabling injury or trade systems.";return;}
         const my = document.getElementById("lg-my").value;
         s.myTeam = my === "" ? null : Number(my);
         if (s.myTeam === null && s.control === "hands") s.control = "all";
         league.name = document.getElementById("lg-name").value || league.name;
         league.settings = s;
+        F.initialize(league);
+        F.dayStart(league);
         saveNow();
         render();
       });

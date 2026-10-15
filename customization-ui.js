@@ -22,7 +22,7 @@
   function refreshTeams(keep) {
     const previous = code();
     const current = keep || code();
-    $('team').replaceChildren(new Option('All MLB players', 'all'));
+    $('team').replaceChildren(new Option('All players (including unassigned)', 'all'));
     for (const value of Object.keys(L.CLUBS)) {
       const meta = C.metadata(base.year, value, description(value));
       $('team').add(new Option(`${meta.name} (${value})`, value));
@@ -33,7 +33,7 @@
     render();
   }
   function render() {
-    custom = C.fictional().find(t => t.customId === code()) || null;
+    custom = C.read().fictional[code()]?.team || null;
     selected = null;
     $('player-form').hidden = true;
     $('player-heading').textContent = 'Select a player';
@@ -44,8 +44,9 @@
     if (custom) rows = ['lineup', 'bench', 'pitchers'].flatMap(group => custom[group].map(p => ({ p, group, kind:group === 'pitchers' ? 'pitchers' : 'batters', id:p.customPlayerId })));
     else {
       const data = C.data(base);
-      rows = ['batters', 'pitchers'].flatMap(kind => data[kind].filter(p => code() === 'all' || [code(), ...(aliases[code()] || [])].includes(p.team)).map(p => ({ p, kind, id:`${kind}:${p.id}` })));
+      rows = ['batters', 'pitchers'].flatMap(kind => data[kind].filter(p => !p.customPlayerId && (code() === 'all' || [code(), ...(aliases[code()] || [])].includes(p.team))).map(p => ({ p, kind, id:`${kind}:${p.id}` })));
     }
+    rows.push(...C.added(base.year).filter(entry => code() === 'all' || entry.team === code() || (aliases[code()] || []).includes(entry.team)).map(entry => ({ p:entry.player, kind:entry.kind, id:entry.id, added:true, team:entry.team })));
     renderPlayers();
   }
   function renderPlayers() {
@@ -56,7 +57,7 @@
     for (const row of matches.slice(0, 120)) {
       const button = document.createElement('button');
       const overall = row.kind === 'pitchers' ? E.pitcherOverall(row.p) : E.batterOverall(row.p);
-      button.textContent = `${row.p.name} / ${row.p.pos || row.p.role || row.group} / OVR ${Math.round(overall)}`;
+      button.textContent = `${row.p.name} / ${row.p.pos || row.p.role || row.group} / OVR ${Math.round(overall)}${row.added ? ` / Added${row.team ? "" : " (unassigned)"}` : ""}`;
       button.setAttribute('aria-pressed', String(selected?.id === row.id));
       button.addEventListener('click', () => edit(row));
       $('players').append(button);
@@ -67,8 +68,21 @@
     $('player-heading').textContent = row.p.name;
     $('player-form').hidden = false;
     $('player-fields').replaceChildren();
-    const keys = ['name', 'bats', 'throws', 'height', 'weight', ...BAT, ...(row.kind === 'pitchers' ? PIT : [])];
-    if (custom) keys.push(row.kind === 'pitchers' ? 'role' : 'pos');
+    const keys = ['name', 'bats', 'throws', 'age', 'height', 'weight', ...BAT, ...(row.kind === 'pitchers' ? PIT : [])];
+    if (custom || row.added) keys.push(row.kind === 'pitchers' ? 'role' : 'pos');
+    $('assignment-label').hidden = !row.added;
+    $('delete-player').hidden = !row.added || row.isNew;
+    $('reset-player').hidden = !!row.isNew;
+    if (row.added) {
+      const select = $('player-team');
+      select.replaceChildren(new Option('Unassigned', ''));
+      for (const value of Object.keys(L.CLUBS)) {
+        const meta = C.metadata(base.year, value, description(value));
+        select.add(new Option(`${meta.name} (MLB ${base.year})`, value));
+      }
+      for (const team of C.fictional()) select.add(new Option(`${team.name} (fictional)`, team.customId));
+      select.value = row.team || '';
+    }
     for (const key of keys) {
       const label = document.createElement('label');
       label.textContent = key.toUpperCase();
@@ -84,7 +98,7 @@
         input.required = true;
       }
       input.name = key;
-      input.value = key === 'height' ? E.playerHeight(row.p) : key === 'weight' ? E.playerWeight(row.p) : row.p[key] ?? (key === 'field' && row.kind === 'pitchers' ? 40 : 50);
+      input.value = key === 'age' ? E.playerAge(row.p)??27 : key === 'height' ? E.playerHeight(row.p) : key === 'weight' ? E.playerWeight(row.p) : row.p[key] ?? (key === 'field' && row.kind === 'pitchers' ? 40 : 50);
       label.append(input);
       $('player-fields').append(label);
     }
@@ -102,7 +116,15 @@
       for (const input of $('player-fields').querySelectorAll('input,select')) edited[input.name] = input.type === 'number' ? Number(input.value) : input.value.trim();
       if (!edited.name) throw new Error('Player name is required.');
       edited.heightManual = true; edited.weightManual = true;
-      if (custom) {
+      if (row.added) {
+        const id = C.saveAdded(base.year, row.kind, edited, $('player-team').value, row.isNew ? undefined : row.id);
+        $('search').value = '';
+        const target = $('player-team').value;
+        refreshTeams(target || 'all');
+        reselect(id);
+        status('Added player saved and assigned. Load the team again in Exhibition or create a new league to select its best roster.');
+        return;
+      } else if (custom) {
         const index = custom[row.group].findIndex(p => p.customPlayerId === row.p.customPlayerId);
         if (row.group === 'lineup' && edited.pos !== row.p.pos) {
           const other = custom.lineup.find(p => p.pos === edited.pos);
@@ -120,10 +142,26 @@
   $('reset-player').addEventListener('click', () => action(async () => {
     if (!selected || !await window.BrowserDialog.confirm(`Reset ${selected.p.name} to the original player?`)) return;
     const id = selected.id;
-    if (custom) C.resetFictional(custom.customId, selected.p.customPlayerId);
+    if (selected.added) C.resetAdded(selected.id);
+    else if (custom) C.resetFictional(custom.customId, selected.p.customPlayerId);
     else C.resetPlayer(base.year, selected.kind, selected.p.id);
     reselect(id);
     status('Player reset.');
+  }));
+  function addPlayer(kind) {
+    const player = { name:kind === 'pitchers' ? 'New Pitcher' : 'New Batter', bats:'R', throws:'R', height:72, weight:200, heightManual:true, weightManual:true, pos:'DH', role:'SP' };
+    if (kind === 'pitchers') delete player.pos;
+    else delete player.role;
+    for (const key of [...BAT,...PIT]) player[key] = 50;
+    edit({ p:player, kind, id:'new-player', added:true, isNew:true, team:code() === 'all' ? '' : code() });
+  }
+  $('add-batter').addEventListener('click', () => action(() => addPlayer('batters')));
+  $('add-pitcher').addEventListener('click', () => action(() => addPlayer('pitchers')));
+  $('delete-player').addEventListener('click', () => action(async () => {
+    if (!selected?.added || !await window.BrowserDialog.confirm(`Delete added player ${selected.p.name}? Existing leagues keep their snapshots.`)) return;
+    C.removeAdded(selected.id);
+    render();
+    status('Added player deleted.');
   }));
   $('team-form').addEventListener('submit', event => {
     event.preventDefault();

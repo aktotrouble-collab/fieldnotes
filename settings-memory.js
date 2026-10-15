@@ -8,13 +8,14 @@
     "shift-sel", "ph-sel", "pc-sel", "ds-slot", "ds-bench", "log-inning", "sch-team", "st-team", "st-q", "p-q",
     "tm-sel", "tm-name", "tm-abbr", "tm-color", "tm-park", "ns-label", "lg-name", "lg-my", "d-my", "d-name", "d-seed", "p-reseed"
   ]);
-  const controls = () => [...document.querySelectorAll("select[id], input[id], textarea[id]")].filter((el) => !SKIP.has(el.id) && el.type !== "file" && el.type !== "button");
+  const skip=el=>SKIP.has(el.id)||!!el.closest('[data-no-memory]');
+  const controls = () => [...document.querySelectorAll("select[id], input[id], textarea[id]")].filter((el) => !skip(el) && el.type !== "file" && el.type !== "button");
   const read = () => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (error) { return {}; } };
   let restoring = true;
 
   const valueOf = (el) => (el.type === "checkbox" || el.type === "radio" ? el.checked : el.value);
   function save(el) {
-    if (restoring || SKIP.has(el.id) || !el.id || el.type === "file") return;
+    if (restoring || skip(el) || !el.id || el.type === "file") return;
     const data = read();
     data[el.id] = valueOf(el);
     try { localStorage.setItem(KEY, JSON.stringify(data)); } catch (error) { /* storage full or blocked */ }
@@ -24,7 +25,7 @@
 
   const done = new WeakSet();
   function restoreOne(el, data) {
-    if (done.has(el) || !el.id || SKIP.has(el.id) || el.type === "file" || el.type === "button" || !(el.id in data)) return;
+    if (done.has(el) || !el.id || skip(el) || el.type === "file" || el.type === "button" || !(el.id in data)) return;
     done.add(el);
     const value = data[el.id];
     if (el.type === "checkbox" || el.type === "radio") {

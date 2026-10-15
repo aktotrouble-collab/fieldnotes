@@ -233,6 +233,7 @@
           <label>Ballpark <i class="tip" tabindex="0" data-tip="Sets the fences, foul poles, default altitude and the climate used for weighted-random wind.">i</i> <select id="park"></select></label>
           <label>Innings <i class="tip" tabindex="0" data-tip="Number of innings in a regulation game. Extra innings are played if it is tied.">i</i> <input id="innings" type="number" value="9" min="1" step="1"></label>
           <label>Seed (optional) <i class="tip" tabindex="0" data-tip="Enter a number to make the game's random rolls repeatable. Leave blank for a different game every time.">i</i> <input id="seed" type="number" placeholder="random" style="width:90px"></label>
+          <label>Game date <input id="game-date" type="date" required></label>
         </div>
         <div class="ctl-grid">
           <span></span><b class="ctl-head">Away</b><b class="ctl-head">Home</b>
@@ -251,12 +252,12 @@
         </div>
         </div>
         <div class="row" id="wx-row" style="align-items:flex-start;flex:1 1 340px;margin-top:10px">
-          <label>Wind <i class="tip" tabindex="0" data-tip="Calm: no wind. I set it: choose speed and direction yourself. Random: any speed and direction. Random, weighted: draws from the park's real typical wind. Wind pushes batted balls, so a tailwind helps homers and a headwind knocks them down.">i</i>
+          <label>Wind <i class="tip" tabindex="0" data-tip="Calm: no wind. I set it: choose speed and direction yourself. Random: any speed and direction. Random, weighted: uses the park's prevailing direction and seasonally adjusted wind strength for the game date. This is a seasonal climate model, not actual historical weather. Wind pushes batted balls, so a tailwind helps homers and a headwind knocks them down.">i</i>
             <select id="wx-mode">
               <option value="calm">Calm</option>
               <option value="fixed">I set it</option>
               <option value="random">Random</option>
-              <option value="park">Random, weighted to the park's real climate</option>
+              <option value="park" selected>Random, weighted to park and season</option>
             </select>
           </label>
           <label>Wind changes <i class="tip" tabindex="0" data-tip="Steady: constant all game. Gusty: small gusts and slow drift. Re-rolled each inning: a new wind is drawn at the start of every inning.">i</i>
@@ -266,12 +267,12 @@
               <option value="inning">Re-rolled each inning</option>
             </select>
           </label>
-          <label>Temperature <i class="tip" tabindex="0" data-tip="Warm air is thinner, so balls carry farther: roughly 3 ft per 10°F on a long fly ball. Standard: 70°F. I set it: choose the temperature. Random: 40 to 100°F. Random, weighted: around the park's typical game-time temperature. Closed roofs are 72°F unless you set it.">i</i>
+          <label>Temperature <i class="tip" tabindex="0" data-tip="Warm air is thinner, so balls carry farther: roughly 3 ft per 10°F on a long fly ball. Standard: 70°F. I set it: choose the temperature. Random: 40 to 100°F. Random, weighted: random variation around a seasonal temperature model for the park and game date. Inland parks have larger seasonal changes than coastal parks. Closed roofs are 72°F unless you set it.">i</i>
             <select id="tp-mode">
               <option value="standard">Standard (70°F)</option>
               <option value="fixed">I set it</option>
               <option value="random">Random</option>
-              <option value="park">Random, weighted to the park's real climate</option>
+              <option value="park" selected>Random, weighted to park and season</option>
             </select>
           </label>
           <label id="tp-fixed" style="display:none">Degrees (°F) <input id="tp-temp" type="number" step="any" value="70" style="width:80px"></label>
@@ -486,8 +487,13 @@
   <script src="players-data.js" onerror="void 0"></script>
   <script src="player-heights.js"></script>
   <script src="player-weights.js"></script>
+  <script src="player-bios.js"></script>
   <script src="fielding-motion.js"></script>
   <script src="game-engine.js"></script>
+  <script src="all-star.js"></script>
+  <script src="starting-contracts.js"></script>
+  <script src="starting-salaries.js"></script>
+  <script src="franchise.js"></script>
   <script src="league-engine.js"></script>
   <script src="customizations.js"></script>
   <script>
@@ -502,6 +508,7 @@
     const PITCH_KEYS = ["velo", "control", "movement", "stamina"];
 
     let teams;
+    let leagueGame = null;
     let game = null;
     let controls = ["sim", "sim"];
     let pitchControls = ["sim", "sim"];
@@ -520,6 +527,7 @@
 
     for (const park of E.PARK_LIST) $("park").add(new Option(park.name, park.id));
     $("park").value = "dodgers";
+    $("game-date").value = new Date().toISOString().slice(0, 10);
 
     /* ------------------------------------------------------------ weather setup */
 
@@ -573,14 +581,16 @@
       if (tmode === "fixed") {
         const t = $("tp-temp").value === "" ? 70 : Number($("tp-temp").value);
         text += `${t}°F changes air density ${Math.round((E.tempFactor(t) - 1) * 1000) / 10}% vs 70°F. `;
-      } else if (tmode === "park") text += `Typical temperature here: about ${E.PARK_TEMP[$("park").value] || 70}°F. `;
+      }       else if (tmode === "park") {
+        if ($("game-date").value) text += `Seasonal temperature near ${$("game-date").value}: about ${Math.round(E.seasonalClimate(E.parkById($("park").value), $("game-date").value).temp)}°F before random variation. `;
+      }
       else if (tmode === "random") text += "Temperature is rolled at random (40 to 100°F). ";
       if (info.roof === "dome") text += "Fixed dome: no wind. ";
       else if (retract && $("wx-roof").value === "closed") text += "Roof closed: no wind. ";
       if (mode === "fixed") {
         const w = E.windVector(Number($("wx-speed").value) || 0, from, info.cf);
         text += `Wind ${$("wx-speed").value || 0} mph from the ${compassName(from)} (${Math.round(from)}°) = ${E.windText(w)}. This park's center field faces ${compassName(info.cf)} (${info.cf}°).`;
-      } else if (mode === "park") text += `Typical wind here: about ${info.mph} mph from the ${compassName(info.from)}.`;
+      }       else if (mode === "park" && $("game-date").value) text += `Seasonal wind: about ${Math.round(E.seasonalClimate(E.parkById($("park").value), $("game-date").value).mph)} mph, weighted from the ${compassName(info.from)}. Seasonal climate model, not a historical forecast.`;
       else if (mode === "random") text += "Wind speed and direction are rolled at random.";
       $("wx-note").textContent = text;
     }
@@ -606,7 +616,7 @@
     $("wx-dial").addEventListener("pointerdown", (event) => { dialDrag = true; $("wx-dial").setPointerCapture(event.pointerId); dialSet(event); });
     $("wx-dial").addEventListener("pointermove", (event) => { if (dialDrag) dialSet(event); });
     $("wx-dial").addEventListener("pointerup", () => { dialDrag = false; });
-    ["park", "wx-mode", "wx-var", "wx-alt", "wx-roof", "wx-speed", "wx-from", "tp-mode", "tp-temp"].forEach((id) => {
+    ["park", "game-date", "wx-mode", "wx-var", "wx-alt", "wx-roof", "wx-speed", "wx-from", "tp-mode", "tp-temp"].forEach((id) => {
       $(id).addEventListener("input", wxRender);
       $(id).addEventListener("change", wxRender);
     });
@@ -687,7 +697,17 @@
     teams = teams.map(permanentTeam);
     let customizationVersion = localStorage.getItem(C.KEY);
     // Session edits keep the original ratings in a hidden _orig, so what gets saved is always the unedited player.
-    const saveTeams = () => { try { localStorage.setItem(TEAMS_KEY, JSON.stringify(teams, (k, v) => (v && v._orig ? { ...v, ...v._orig } : v))); } catch (error) { /* ignore */ } };
+    const saveTeams = () => {
+      if (new URLSearchParams(location.search).get("league") && leagueGame?.event === "allstar") {
+        leagueGame.config.away = JSON.parse(JSON.stringify(teams[0]));
+        leagueGame.config.home = JSON.parse(JSON.stringify(teams[1]));
+        leagueGame.setupSaved = true;
+        try { localStorage.setItem(LEAGUE_PENDING,JSON.stringify(leagueGame)); }
+        catch (error) { $("errors").textContent = `Couldn't save All-Star setup: ${error.message}`; }
+        return;
+      }
+      try { localStorage.setItem(TEAMS_KEY, JSON.stringify(teams, (k, v) => (v && v._orig ? { ...v, ...v._orig } : v))); } catch (error) { /* ignore */ }
+    };
 
     const f1 = (v) => (Math.round(v * 10) / 10).toFixed(1);
     // Recomputes every OVR cell and team rating strip in place (so typing never loses focus).
@@ -1134,7 +1154,7 @@
     /* Compact roster rows: hover for attributes, click to edit them for this session only. */
     const ATTR_LABELS = { contact: "CON", power: "PWR", eye: "EYE", speed: "SPD", arm: "ARM", field: "FLD", risk: "RISK", velo: "VELO", control: "CTL", movement: "MOV", stamina: "STA" };
     const PIT_KEYS = ["velo", "control", "movement", "stamina"];
-    const EDIT_KEYS = ["name", "pos", "bats", "throws", "height", "heightManual", "weight", "weightManual", "mlb", "customYear", ...BAT_KEYS, ...PIT_KEYS];
+    const EDIT_KEYS = ["name", "pos", "bats", "throws", "age", "birthDate", "height", "heightManual", "weight", "weightManual", "mlb", "customYear", ...BAT_KEYS, ...PIT_KEYS];
     function rememberOriginal(player) {
       if (player._orig) return;
       const snap = {};
@@ -1246,6 +1266,8 @@
         const field = (label, node) => { const l = document.createElement("label"); l.append(label, node); grid.append(l); };
         const nameIn = textInput(player, "name");
         field("Name", nameIn);
+        player.age=E.playerAge(player)??27;
+        field("Age (years)",numInput(player,"age"));
         if (isPitcher) field("Throws", selectInput(player, "throws", ["R", "L"]));
         else { field("Position", selectInput(player, "pos", POS_OPTIONS)); field("Bats", selectInput(player, "bats", ["R", "L", "S"])); }
         const heightInput = document.createElement("input");
@@ -1532,6 +1554,7 @@
         const years = new Set([team.year, team.src && team.src.year, ...[...team.lineup, ...team.bench, ...team.pitchers].map(p => p.customYear)].filter(y => y && y !== latestYear));
         for (const year of years) loadSeason(year, ok => {
           if (!ok) { alert(`Couldn't load ${year} custom player defaults.`); return; }
+          if (leagueGame?.event === "allstar") return;
           teams[i] = permanentTeam(teams[i]);
           renderTeams();
         });
@@ -1539,6 +1562,7 @@
     }
     refreshPermanentTeams();
     function refreshCustomization() {
+      if (leagueGame?.event === "allstar") return;
       const version = localStorage.getItem(C.KEY);
       if (game || version === customizationVersion) return;
       try {
@@ -1557,15 +1581,31 @@
 
     const LEAGUE_PENDING = "field-notes-league-pending-v1";
     const LEAGUE_RESULT = "field-notes-league-result-v1";
-    let leagueGame = null;
     let leagueDone = false;
+    const A = window.AllStar;
+    const isDerby = () => leagueGame?.event === "derby";
+    const isAllStar = () => leagueGame?.event === "allstar";
+    let derbyMode = "timing";
+    let derbyTimer = null;
     if (new URLSearchParams(location.search).get("league")) {
       try { leagueGame = JSON.parse(localStorage.getItem(LEAGUE_PENDING)); } catch (error) { leagueGame = null; }
     }
     if (leagueGame && leagueGame.config) {
+      $("game-date").value = leagueGame.config.weather.date || new Date().toISOString().slice(0, 10);
+      $("game-date").disabled = true;
       $("teams").classList.add("hidden");
       $("park").value = leagueGame.config.park;
       $("innings").value = leagueGame.config.innings;
+      const leagueWeather = leagueGame.config.weather;
+      $("wx-mode").value = leagueWeather.mode || "park";
+      $("wx-var").value = leagueWeather.variation || "steady";
+      $("tp-mode").value = leagueWeather.tempMode || "park";
+      $("wx-speed").value = leagueWeather.speed || 0;
+      $("wx-from").value = leagueWeather.from || 0;
+      $("tp-temp").value = leagueWeather.temp ?? 70;
+      $("wx-roof").value = leagueWeather.roof || "closed";
+      $("wx-alt").value = leagueWeather.altitude ?? "";
+      wxRender();
       ["park", "innings", "seed"].forEach((id) => { $(id).disabled = true; });
       document.querySelectorAll("#wx-row input, #wx-row select").forEach((el) => { el.disabled = true; });
       if (leagueGame.my != null) {
@@ -1576,32 +1616,163 @@
       note.className = "card";
       note.innerHTML = `<h2 style="margin:0 0 6px">League game: ${leagueGame.label.replace(/[<>&]/g, "")}</h2><div class="muted">Teams, ballpark, weather and innings come from the league. Pick how each side is controlled, then play ball. The result is sent back to the league when the game ends.</div><div style="margin-top:8px"><a href="league.html">&larr; Back to the league without playing</a></div>`;
       $("setup").prepend(note);
+      if (isAllStar()) {
+        teams = [leagueGame.config.away,leagueGame.config.home].map((team,i)=>({
+          ...JSON.parse(JSON.stringify(team)),abbr:team.abbr || leagueGame.abbrs[i],color:team.color || leagueGame.colors[i]
+        }));
+        renderTeams();
+        $("teams").classList.remove("hidden");
+        ["game-date","park","innings","seed"].forEach(id=>{ $(id).disabled=false; });
+        $("seed").value=leagueGame.config.seed;
+        document.querySelectorAll("#wx-row input, #wx-row select").forEach(el=>{el.disabled=false;});
+        note.querySelector("h2").textContent="All-Star Game setup";
+        note.querySelector(".muted").textContent="Set up this game just like Exhibition: edit teams, lineups, bench, pitching staff, player ratings, park, date, weather, innings, seed and controls. Only the All-Star result is saved to the league; regular-season rosters and stats stay unchanged. League-player selection overrides are also available on the All-Star Festivities tab.";
+      }
+      if (isDerby()) {
+        note.querySelector("h2").textContent = "League Home Run Derby";
+        note.querySelector(".muted").textContent = "Eight-player bracket · 10 swings per hitter per matchup. Select any combination of hitters to control: all, none, or any number. Unselected hitters are simulated. You can change your choices during the Derby. Takes do not use a swing. Use Timing + click (normal/power) or EV / LA batting controls. Progress saves after every swing. Ties: up to three extra swings each, then longest homer; alternating one-swing rounds resolve any remaining tie.";
+        $("ctl-0").value = "timing";
+        $("pctl-0").value = "sim";
+        $("pctl-1").value = "sim";
+        $("fctl-0").value = "sim";
+        $("fctl-1").value = "sim";
+        const panel = document.createElement("div");
+        panel.id = "derby-panel";
+        panel.className = "card";
+        panel.innerHTML = '<h2>Home Run Derby</h2><div id="derby-status"></div><details id="derby-choice"><summary>Choose hitters to control</summary><p>Select any number. Unchecked hitters are simulated.</p><div id="derby-controls"></div><button id="derby-all">Select all</button> <button id="derby-none">Select none</button> <button id="derby-confirm" class="primary">Apply control choices</button></details><div id="derby-result" role="status"></div>';
+        $("play").prepend(panel);
+        $("derby-choice").addEventListener("toggle",()=>{
+          if ($("derby-choice").open) {
+            if (phase === "ready" && !holdView) clearTimeout(derbyTimer);
+            if (game) refresh();
+          } else if (game && !game.over && phase === "ready" && !holdView && Array.isArray(leagueGame.allStarEvent.derby.controlled)) prepareDerbyTurn();
+        });
+        const d=leagueGame.allStarEvent.derby;
+        $("derby-controls").innerHTML=d.entrants.map((entry,i)=>`<label style="display:block"><input type="checkbox" value="${i}"${A.controlled(leagueGame.allStarEvent,i) ? " checked" : ""}> ${esc(entry.player.name)}</label>`).join("");
+        for (const [id,checked] of [["derby-all",true],["derby-none",false]]) $(id).addEventListener("click",()=>{
+          $("derby-controls").querySelectorAll("input").forEach(input=>{input.checked=checked;});
+        });
+        $("derby-confirm").addEventListener("click",()=>{
+          if (phase !== "ready" || holdView || !A.currentMatch(leagueGame.allStarEvent)) return;
+          const previous=d.controlled;
+          d.controlled=[...$("derby-controls").querySelectorAll("input:checked")].map(input=>Number(input.value));
+          if (saveDerby()) { $("derby-choice").open=false;prepareDerbyTurn(); }
+          else d.controlled=previous;
+        });
+      }
     }
     function reportLeague() {
       if (!leagueGame || leagueDone || !window.LeagueEngine) return;
       try {
-        localStorage.setItem(LEAGUE_RESULT, JSON.stringify({ leagueId: leagueGame.leagueId, refId: leagueGame.refId, ex: window.LeagueEngine.extract(game) }));
+        localStorage.setItem(LEAGUE_RESULT, JSON.stringify({
+          leagueId: leagueGame.leagueId, refId: leagueGame.refId,event:leagueGame.event,
+          ...(isDerby() ? { derby:leagueGame.allStarEvent.derby } : { ex:window.LeagueEngine.extract(game),...(isAllStar() ? {config:leagueGame.config} : {}) })
+        }));
         leagueDone = true;
         $("btn-league").classList.remove("hidden");
         $("btn-league").textContent = "Return to league (result saved)";
-      } catch (error) { /* ignore */ }
+      } catch (error) {
+        $("banner").textContent = `Couldn't save the league result: ${error.message}`;
+        $("btn-league").classList.remove("hidden");
+        $("btn-league").textContent = "Retry saving league result";
+      }
     }
-    $("btn-league").addEventListener("click", () => { location.href = "league.html"; });
+
+    function saveDerby() {
+      try { localStorage.setItem(LEAGUE_PENDING,JSON.stringify(leagueGame)); return true; }
+      catch (error) { $("derby-result").textContent = `Couldn't save Derby progress: ${error.message}. Free browser storage before continuing.`; return false; }
+    }
+    function prepareDerbyTurn() {
+      clearTimeout(derbyTimer);
+      const event = leagueGame.allStarEvent, turn = A.battingTurn(event);
+      holdView = false;
+      phase = "ready";
+      pendingRec = null;
+      timing = null;
+      if (!turn) {
+        game.over = true;
+        $("derby-status").textContent = `${event.derby.entrants[event.derby.champion].player.name} wins the Home Run Derby!`;
+        $("derby-choice").classList.add("hidden");
+        refresh();
+        reportLeague();
+        return;
+      }
+      game = A.createDerbyGame(event,leagueGame.config);
+      const m = turn.match;
+      const entrant = event.derby.entrants[turn.entrant].player;
+      const scores = m.turns.map(A.totals);
+      $("derby-status").textContent = `${["Quarterfinal","Semifinal","Final"][m.round]} · ${event.derby.entrants[m.a].player.name} ${scores[0].hr} – ${scores[1].hr} ${event.derby.entrants[m.b].player.name} · Batting: ${entrant.name} · ${turn.swing > 13 ? "Longest-homer shootout · round "+(turn.swing-13) : turn.tiebreak ? "Tiebreak swing "+turn.swing : "Swing "+turn.swing+" / 10"}`;
+      const choose = !Array.isArray(event.derby.controlled);
+      if (choose) $("derby-choice").open=true;
+      const controlled = A.controlled(event,turn.entrant);
+      controls = [controlled ? derbyMode : "sim","sim"];
+      pitchControls = ["sim","sim"];
+      fieldControls = ["sim","sim"];
+      lastZone = null;
+      refresh();
+      $("btn-pitch").disabled = choose || !controlled || $("derby-choice").open;
+      sendScene();
+      if (!choose && !controlled && !$("derby-choice").open) {
+        derbyTimer = setTimeout(()=>{
+          const pitch = E.nextPitch(game);
+          const rec = beginRec(pitch);
+          const result = E.stepPitch(game,undefined,{derby:true});
+          settleDerby(result,rec);
+        },500);
+      }
+    }
+    function settleDerby(event,rec) {
+      pendingRec = null;
+      timing = null;
+      phase = "ready";
+      hideMini();
+      showOverlay(false);
+      const ball = event.ball;
+      if (event.swing) A.recordSwing(leagueGame.allStarEvent,{
+        hr:!!ball?.hr,distance:ball ? E.hitDistance(ball) : 0,ev:ball?.ev || 0,la:ball?.la || 0
+      });
+      const saved = saveDerby();
+      $("derby-result").textContent = saved
+        ? ball ? `${ball.hr ? "HOME RUN" : ball.fair ? "No homer" : "Foul"} · EV ${ball.ev.toFixed(1)} mph · LA ${ball.la.toFixed(1)}° · ${Math.round(E.hitDistance(ball))} ft`
+          : event.swing ? "Swing and miss — one swing used." : "Taken pitch — no swing used."
+        : $("derby-result").textContent;
+      holdView = true;
+      refresh();
+      let ms = 1000;
+      if (ball) {
+        const points = ball.fullPts || ball.pts;
+        post({ type:"gm-play",points,landing:ball.landing,throws:[],runners:[],tracks:[],lead:preRoll(rec.pitch),color:ball.hr ? "#d4b15f" : "#9aa59d" });
+        celebrateHomeRun(ball,{},rec.snap,rec.pitch);
+        ms = (preRoll(rec.pitch)+points[points.length-1].t+0.7)*1000;
+      }
+      derbyTimer = setTimeout(()=>{
+        holdView = false;
+        if (!saved && !saveDerby()) return;
+        prepareDerbyTurn();
+      },Math.min(14000,ms));
+    }
+    $("btn-league").addEventListener("click", () => {
+      if (!leagueDone) { reportLeague(); return; }
+      location.href = "league.html";
+    });
 
     /* ------------------------------------------------------------ game flow */
 
     $("start").addEventListener("click", () => {
       const seedValue = $("seed").value.trim();
       try {
-        const away = leagueGame ? leagueGame.config.away : JSON.parse(JSON.stringify(teams[0]));
-        const home = leagueGame ? leagueGame.config.home : JSON.parse(JSON.stringify(teams[1]));
-        game = E.createGame({
+        const locked = leagueGame && !isAllStar();
+        const away = locked ? leagueGame.config.away : JSON.parse(JSON.stringify(teams[0]));
+        const home = locked ? leagueGame.config.home : JSON.parse(JSON.stringify(teams[1]));
+        if (!locked && !$("game-date").reportValidity()) return;
+        const config = {
           away,
           home,
-          park: leagueGame ? leagueGame.config.park : $("park").value,
-          innings: leagueGame ? leagueGame.config.innings : Math.max(1, Math.floor(Number($("innings").value) || 9)),
+          park: locked ? leagueGame.config.park : $("park").value,
+          innings: locked ? leagueGame.config.innings : Math.max(1, Math.floor(Number($("innings").value) || 9)),
           ghost: leagueGame ? leagueGame.config.ghost : undefined,
-          weather: leagueGame ? leagueGame.config.weather : {
+          weather: locked ? leagueGame.config.weather : {
+            date: $("game-date").value,
             mode: $("wx-mode").value,
             variation: $("wx-var").value,
             speed: Number($("wx-speed").value) || 0,
@@ -1611,17 +1782,23 @@
             temp: $("tp-temp").value.trim() === "" ? null : Number($("tp-temp").value),
             roof: $("wx-roof").value
           },
-          seed: leagueGame ? leagueGame.config.seed : seedValue === "" ? Math.floor(Math.random() * 1e9) : Number(seedValue),
+          seed: locked ? leagueGame.config.seed : seedValue === "" ? Math.floor(Math.random() * 1e9) : Number(seedValue),
           coach: [$("coach-0").value, $("coach-1").value]
-        });
+        };
+        game = E.createGame(config);
+        if (isAllStar()) {
+          leagueGame.config=config;
+          leagueGame.setupSaved=true;
+          localStorage.setItem(LEAGUE_PENDING,JSON.stringify(leagueGame));
+        }
       } catch (error) {
         $("errors").textContent = error.message.replace(/\. /g, ".\n");
         return;
       }
       $("errors").textContent = "";
       game.teams.forEach((t, i) => {
-        t.abbr = leagueGame ? leagueGame.abbrs[i] : teamAbbr(teams[i]);
-        t.color = leagueGame ? leagueGame.colors[i] : (teams[i].color || DEFAULT_COLORS[i]);
+        t.abbr = leagueGame && !isAllStar() ? leagueGame.abbrs[i] : teamAbbr(teams[i]);
+        t.color = leagueGame && !isAllStar() ? leagueGame.colors[i] : (teams[i].color || DEFAULT_COLORS[i]);
       });
       controls = [$("ctl-0").value, $("ctl-1").value];
       pitchControls = [$("pctl-0").value, $("pctl-1").value];
@@ -1644,10 +1821,17 @@
       $("setup").classList.add("hidden");
       $("play").classList.remove("hidden");
       loadPark(game.park.id);
+      if (isDerby()) {
+        derbyMode = $("ctl-0").value === "evla" ? "evla" : "timing";
+        for (const id of ["btn-pa","btn-half","btn-game","btn-autopause"]) $(id).classList.add("hidden");
+        prepareDerbyTurn();
+        return;
+      }
       refresh();
     });
 
     $("btn-new").addEventListener("click", () => {
+      if (isDerby()) { clearTimeout(derbyTimer); location.href="league.html";return; }
       if (leagueGame && leagueDone) { location.href = "league.html"; return; }
       resetUmpUI();
       contactRun = null;
@@ -2437,6 +2621,13 @@
     }
 
     $("btn-pitch").addEventListener("click", () => {
+      if (isDerby()) {
+        const match = A.currentMatch(leagueGame.allStarEvent);
+        if (!match || !Array.isArray(leagueGame.allStarEvent.derby.controlled) || $("derby-choice").open || phase !== "ready" || holdView || controls[0] === "sim") return;
+        clearHomeRun();
+        hideMini();
+        return deliver(E.nextPitch(game));
+      }
       if (game && !game.over && (holdView || ["challenge", "swinging", "live"].includes(phase))) skipAnimation();
       if (!game || game.over || phase !== "ready" || holdView) return;
       clearHomeRun();
@@ -2468,7 +2659,7 @@
 
     function resolveManual(manual, ctx, defer) {
       const rec = pendingRec || beginRec(E.nextPitch(game));
-      const opts = ctx || { ...liveCtl(), human: humanFlags(), hold: true };
+      const opts = isDerby() ? { derby:true } : ctx || { ...liveCtl(), human: humanFlags(), hold: true };
       const event = E.stepPitch(game, manual, opts);
       if (event && event.held === "ff") {
         return (defer || settle)(E.playHeldContact(game, opts), rec);
@@ -2535,6 +2726,7 @@
     $("btn-autopause").addEventListener("click", () => { autoPaused = true; clearTimeout(autoTimer); refresh(); });
 
     function settle(event, rec) {
+      if (isDerby()) return settleDerby(event,rec);
       if (event && event.contactPending) return showPendingContact(event, rec);
       const foul = !!(event && event.foul);
       const auto = autoOK(event);
@@ -3410,6 +3602,15 @@
       if (!lastBall) drawField();
       renderBox();
       archiveGame();
+      if (isDerby()) {
+        $("inning-label").textContent = "Home Run Derby";
+        $("score").innerHTML = "";
+        $("matchup").textContent = "";
+        $("btn-pitch").disabled = game.over || busy || $("derby-choice").open || !Array.isArray(leagueGame.allStarEvent.derby.controlled) || controls[0] === "sim";
+        $("derby-confirm").disabled=game.over || busy;
+        $("btn-autopause").classList.add("hidden");
+        $("btn-new").textContent = "Return to league (save progress)";
+      }
     }
 
     function renderLog() {
@@ -3491,6 +3692,7 @@
     };
 
     function archiveGame() {
+      if (isDerby()) return;
       if (!game || !game.over || game.archived) return;
       game.archived = true;
       reportLeague();
