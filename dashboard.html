@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Field Notes · Game Mode</title>
+  <style>
+    :root { color-scheme:light; --green:#176442; --line:#ddd7c6; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:#f4f1e8; color:#1f2a24; font:14px system-ui,sans-serif; }
+    header { padding:15px 22px 0; background:#fffdf7; border-bottom:1px solid var(--line); }
+    .heading { display:flex; justify-content:space-between; align-items:center; gap:16px; }
+    h1 { font-size:19px; margin:0; } h1 span { font-weight:400; color:#6c756f; }
+    a { color:var(--green); }
+    nav { display:flex; gap:6px; margin-top:14px; }
+    button { font:inherit; cursor:pointer; border:1px solid var(--line); border-bottom:0; border-radius:9px 9px 0 0; padding:10px 18px; background:#f4f1e8; color:#1f2a24; }
+    button[aria-selected=true] { background:var(--green); color:white; border-color:var(--green); }
+    iframe { display:block; border:0; width:100%; height:calc(100dvh - 101px); min-height:400px; }
+    [hidden] { display:none !important; }
+    @media(max-width:500px) { header { padding:12px 10px 0; } button { padding:10px 12px; } h1 { font-size:16px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="heading"><h1>Field Notes <span>/ Game Mode</span></h1><a href="index.html">Spray chart</a></div>
+    <nav role="tablist" aria-label="Game modes">
+      <button role="tab" id="tab-customization" aria-controls="panel-customization" aria-selected="false" data-tab="customization">Customization</button>
+      <button role="tab" id="tab-exhibition" aria-controls="panel-exhibition" aria-selected="true" data-tab="exhibition">Exhibition</button>
+      <button role="tab" id="tab-league" aria-controls="panel-league" aria-selected="false" data-tab="league">League</button>
+    </nav>
+  </header>
+  <main id="panels"></main>
+  <script>
+    (() => {
+      const pages = { customization:"customization.html", exhibition:"game.html", league:"league.html" };
+      const frames = {};
+      function select(tab) {
+        if (!pages[tab]) tab = "exhibition";
+        if (!frames[tab]) {
+          const panel = document.createElement("section");
+          panel.id = `panel-${tab}`;
+          panel.setAttribute("role", "tabpanel");
+          panel.setAttribute("aria-labelledby", `tab-${tab}`);
+          const frame = document.createElement("iframe");
+          frame.title = tab === "exhibition" ? "Exhibition Game" : tab === "league" ? "League" : "Customization";
+          frame.src = pages[tab];
+          panel.append(frame);
+          document.getElementById("panels").append(panel);
+          frames[tab] = { panel, frame };
+        }
+        for (const [key, entry] of Object.entries(frames)) entry.panel.hidden = key !== tab;
+        document.querySelectorAll("[data-tab]").forEach(button => {
+          button.setAttribute("aria-selected", String(button.dataset.tab === tab));
+          button.tabIndex = button.dataset.tab === tab ? 0 : -1;
+        });
+        if (location.hash !== `#${tab}`) history.replaceState(null, "", `#${tab}`);
+        frames[tab].frame.contentWindow.postMessage({ type:"dashboard-activate" }, "*");
+      }
+      document.querySelectorAll("[data-tab]").forEach((button, index, buttons) => {
+        button.addEventListener("click", () => select(button.dataset.tab));
+        button.addEventListener("keydown", event => {
+          if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+          event.preventDefault();
+          const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
+          buttons[next].focus();
+          select(buttons[next].dataset.tab);
+        });
+      });
+      window.addEventListener("hashchange", () => select(location.hash.slice(1)));
+      select(location.hash.slice(1));
+    })();
+  </script>
+</body>
+</html>

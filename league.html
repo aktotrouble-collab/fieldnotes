@@ -60,7 +60,7 @@
 <body>
   <header>
     <div><strong>Field Notes</strong><span>League mode</span></div>
-    <div style="display:flex;gap:16px;align-items:center"><a href="game.html">Game mode</a><a href="index.html">&larr; Spray chart</a></div>
+    <div style="display:flex;gap:16px;align-items:center"><a href="dashboard.html#league" target="_top">Game dashboard</a><a href="index.html" target="_top">&larr; Spray chart</a></div>
   </header>
   <main id="app"></main>
   <script src="park-walls.js"></script>
@@ -71,10 +71,13 @@
   <script src="fielding-motion.js"></script>
   <script src="game-engine.js"></script>
   <script src="league-engine.js"></script>
+  <script src="customizations.js"></script>
+  <script src="browser-dialog.js"></script>
   <script>
   (() => {
     const L = window.LeagueEngine;
     const GE = window.GameEngine;
+    const C = window.Customizations;
     const $app = document.getElementById("app");
     const INDEX_KEY = "field-notes-league-index-v1";
     const LEAGUE_KEY = (id) => `field-notes-league-${id}`;
@@ -105,8 +108,10 @@
         const list = readIndex().filter((x) => x.id !== league.id);
         list.unshift({ id: league.id, name: league.name, label: league.settings.seasonLabel, updated: Date.now() });
         writeIndex(list);
+        return true;
       } catch (e) {
         alert("Couldn't save the league (browser storage is full). Export it from the league list and delete older leagues.");
+        return false;
       }
     }
     const save = () => { clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 300); };
@@ -134,6 +139,7 @@
       L.recordRef(league, ref, res.ex);
       L.closeDayIfDone(league);
       saveNow();
+      return true;
     }
 
     /* ------------------------------------------------------- season data */
@@ -145,7 +151,7 @@
       s.onerror = () => { s.remove(); done(false); };
       document.head.append(s);
     }
-    const seasonData = (year) => (year === latestYear ? window.MLB_PLAYERS : window.MLB_SEASONS[year]);
+    const seasonData = (year) => C.data(year === latestYear ? window.MLB_PLAYERS : window.MLB_SEASONS[year]);
 
     /* ------------------------------------------------------ list / create */
     let draft = null;
@@ -158,13 +164,14 @@
         const saved = JSON.parse(localStorage.getItem(TEAMS_KEY));
         d.saved = Array.isArray(saved) ? saved : [];
       } catch (e) { d.saved = []; }
+      d.saved = d.saved.filter(t => !t.customId).concat(C.fictional());
       return d;
     }
 
     function fillDraftTeams(d) {
       const keepSaved = d.teams.filter((t) => t.roster);
       let base;
-      if (d.source === "mlb") base = L.mlbDescriptors(Object.keys(L.CLUBS)).map((t) => ({ ...t, on: true }));
+      if (d.source === "mlb") base = L.mlbDescriptors(Object.keys(L.CLUBS)).map((t) => ({ ...C.metadata(d.year, t.code, t), on: true }));
       else base = L.generatedDescriptors(d.count, d.leagues, d.perDivision, Number(d.seed) || 1).map((t) => ({ ...t, on: true }));
       d.teams = base.concat(keepSaved);
       d.settings.leagueNames = d.source === "mlb" ? ["AL", "NL"] : ["A", "B", "C", "D"].slice(0, d.leagues);
@@ -292,7 +299,7 @@
       const d = draft;
       const years = [];
       for (let y = latestYear; y >= FIRST_SEASON; y -= 1) years.push([y, y]);
-      const savedHtml = d.saved.length ? `<h3>Your saved Game-mode teams</h3><div class="row">${d.saved.map((t, i) => `<label class="inline"><input type="checkbox" data-saved="${i}"${d.teams.some((x) => x.roster && x.savedIdx === i) ? " checked" : ""}> ${esc(t.name)}</label>`).join("")}</div>` : "";
+      const savedHtml = d.saved.length ? `<h3>Your saved Exhibition and Customization teams</h3><div class="row">${d.saved.map((t, i) => `<label class="inline"><input type="checkbox" data-saved="${i}"${d.teams.some((x) => x.roster && x.savedIdx === i) ? " checked" : ""}> ${esc(t.name)}</label>`).join("")}</div>` : "";
       $app.innerHTML = `
         <div class="card"><h2>New league · ${d.source === "mlb" ? "Real MLB" : "Generated"}</h2>
           <div class="row">
@@ -316,7 +323,7 @@
       g("d-cancel").addEventListener("click", () => { draft = null; renderList(); });
       g("d-name").addEventListener("input", (e) => { d.name = e.target.value; });
       g("d-seed").addEventListener("input", (e) => { d.seed = e.target.value; });
-      if (d.source === "mlb") g("d-year").addEventListener("change", (e) => { d.year = Number(e.target.value); d.settings.startDate = `${d.year}-03-26`; g("s-start").value = d.settings.startDate; });
+      if (d.source === "mlb") g("d-year").addEventListener("change", (e) => { d.year = Number(e.target.value); d.settings.startDate = `${d.year}-03-26`; g("s-start").value = d.settings.startDate; fillDraftTeams(d); drawTeamTable(); });
       else {
         const regen = () => {
           d.count = Math.max(2, Number(g("d-count").value) || 16);
@@ -332,7 +339,7 @@
         d.teams = d.teams.filter((t) => !(t.roster && t.savedIdx === i));
         if (cb.checked) {
           const t = d.saved[i];
-          d.teams.push({ name: t.name, abbr: (t.abbr || t.name.slice(0, 3)).toUpperCase().slice(0, 4), color: t.color || "#29845e", park: "yankees", league: d.teams[0] ? d.teams[0].league : "A", division: d.teams[0] ? d.teams[0].division : "East", roster: t, savedIdx: i, on: true });
+          d.teams.push({ name: t.name, abbr: (t.abbr || t.name.slice(0, 3)).toUpperCase().slice(0, 4), color: t.color || "#29845e", park: t.park || "yankees", league: d.teams[0] ? d.teams[0].league : "A", division: d.teams[0] ? d.teams[0].division : "East", roster: t, savedIdx: i, on: true });
         }
         drawTeamTable();
       }));
@@ -385,7 +392,7 @@
           const seed = d.seed === "" ? undefined : Number(d.seed);
           const lg = L.createLeague({
             name: d.name || "My League", source: d.source, year: d.source === "mlb" ? d.year : null, seed, settings,
-            teams: on.map((t) => ({ code: t.code, name: t.name.trim(), abbr: t.abbr.trim() || t.name.slice(0, 3).toUpperCase(), color: t.color, park: t.park, league: t.league.trim() || "A", division: t.division.trim() || "East", roster: t.roster || null }))
+            teams: on.map((t) => ({ code: t.code, name: t.name.trim(), abbr: t.abbr.trim() || t.name.slice(0, 3).toUpperCase(), color: t.color, park: t.park, league: t.league.trim() || "A", division: t.division.trim() || "East", roster: t.roster ? C.applyRoster(t.roster, { ...window.MLB_SEASONS, [latestYear]:window.MLB_PLAYERS }, latestYear, true) : null }))
           }, d.source === "mlb" ? seasonData(d.year) : null);
           league = lg;
           draft = null;
@@ -394,10 +401,14 @@
           render();
         } catch (e) { err.textContent = String(e.message || e); }
       };
-      if (d.source === "mlb") {
-        err.textContent += "Loading player data…";
-        loadSeason(d.year, (ok) => { if (!ok) err.textContent = "Couldn't load that season's data."; else make(); });
-      } else make();
+      const years = new Set([...(d.source === "mlb" ? [d.year] : []), ...on.flatMap(t => t.roster ? [t.roster.src?.year, t.roster.year, ...[...t.roster.lineup, ...t.roster.bench, ...t.roster.pitchers].map(p => p.customYear)] : [])].filter(Boolean));
+      if (!years.size) return make();
+      err.textContent += "Loading player data…";
+      let remaining = years.size, failed = false;
+      for (const year of years) loadSeason(year, ok => {
+        if (!ok) { failed = true; err.textContent = `Couldn't load ${year} player data.`; }
+        if (--remaining === 0 && !failed) make();
+      });
     }
 
     /* ------------------------------------------------------------ league */
@@ -794,7 +805,36 @@
         <label>My team<select id="lg-my">${opt([["", "None"], ...league.teams.map((t, i) => [i, t.name])], league.settings.myTeam == null ? "" : league.settings.myTeam)}</select></label></div>
         ${settingsHtml(league.settings, true)}
         <p class="note">Schedule length, series length, rotation and roster sizes are fixed once a season is created. Everything else can change mid-season; ballpark, weather and innings apply from the next game.</p>
-        <div class="row" style="margin-top:10px"><button class="primary" id="lg-save">Save settings</button><button id="lg-export">Export league</button></div></div>`;
+        <div class="row" style="margin-top:10px"><button class="primary" id="lg-save">Save settings</button><button id="lg-export">Export league</button><button id="lg-customization">Update customization</button></div>
+        <p class="note">Update customization refreshes current players' attributes and team details from this browser's saved defaults. Roster assignments, results, standings, schedules and accumulated statistics stay intact. Changes apply to future games only.</p><div id="custom-status" role="status"></div></div>`;
+      document.getElementById("lg-customization").disabled = running;
+      document.getElementById("lg-customization").addEventListener("click", async () => {
+        if (running || !await window.BrowserDialog.confirm("Update this league's current players and team details from Customization? Played games and roster assignments will not change.")) return;
+        const targetId = league.id;
+        document.getElementById("lg-customization").disabled = true;
+        const years = new Set([league.year, ...league.teams.flatMap(t => [t.src?.year, ...[...t.roster.lineup, ...t.roster.bench, ...t.roster.rotation, ...t.roster.bullpen].map(p => p.customYear)])].filter(Boolean));
+        let remaining = years.size;
+        const update = () => {
+          try {
+            if (running || league.id !== targetId) throw new Error("Stop simulation and reopen league settings before updating.");
+            const clubs = Object.fromEntries(L.mlbDescriptors(Object.keys(L.CLUBS)).map(t => [t.code, t]));
+            league = C.updateLeague(league, { ...window.MLB_SEASONS, [latestYear]: window.MLB_PLAYERS }, clubs);
+            if (!saveNow()) throw new Error("The updated league could not be saved to browser storage.");
+            render();
+            document.getElementById("custom-status").textContent = "Customization updated. Previous results and statistics were preserved.";
+          } catch (error) {
+            const status = document.getElementById("custom-status");
+            if (status) status.textContent = `Couldn't update customization: ${error.message}`;
+            else alert(`Couldn't update customization: ${error.message}`);
+          }
+        };
+        if (!remaining) return update();
+        let failed = false;
+        for (const year of years) loadSeason(year, ok => {
+          if (!ok) { failed = true; alert(`Couldn't load ${year} player data. No league customizations were applied.`); }
+          if (--remaining === 0 && !failed) update();
+        });
+      });
       document.getElementById("lg-save").addEventListener("click", () => {
         const s = readSettings(league.settings);
         const my = document.getElementById("lg-my").value;
@@ -814,7 +854,25 @@
       });
     }
 
-    window.addEventListener("focus", () => { if (league && !running) { importResult(); render(); } });
+    window.addEventListener("focus", () => { if (league && !running && importResult()) render(); });
+    let customizationVersion = localStorage.getItem(C.KEY);
+    window.addEventListener("message", event => {
+      if (event.source !== parent || event.data?.type !== "dashboard-activate" || running) return;
+      if (league) {
+        if (importResult()) render();
+      } else if (draft && customizationVersion !== localStorage.getItem(C.KEY)) {
+        draft.settings = readSettings(draft.settings);
+        const saved = C.fictional();
+        draft.saved = draft.saved.filter(t => !t.customId).concat(saved);
+        draft.teams = draft.teams.filter(t => !t.roster?.customId || saved.some(s => s.customId === t.roster.customId));
+        for (const team of draft.teams.filter(t => t.roster?.customId)) {
+          team.roster = saved.find(t => t.customId === team.roster.customId);
+          team.savedIdx = draft.saved.findIndex(t => t.customId === team.roster.customId);
+        }
+        renderCreate();
+      }
+      customizationVersion = localStorage.getItem(C.KEY);
+    });
     window.addEventListener("pagehide", () => { if (league) saveNow(); });
     const last = localStorage.getItem("field-notes-league-current");
     if (last && localStorage.getItem(LEAGUE_KEY(last)) && new URLSearchParams(location.search).get("open") !== "list") openLeague(last);

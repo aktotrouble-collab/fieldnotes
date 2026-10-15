@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Field Notes · Game Mode</title>
+  <title>Field Notes · Exhibition Game</title>
   <style>
     :root { --bg:#f4f1e8; --card:#fffdf7; --ink:#1f2a24; --mute:#6c756f; --line:#ddd7c6; --green:#29845e; --accent:#d27637; --blue:#3277a7; }
     * { box-sizing: border-box; }
@@ -220,8 +220,8 @@
 <body>
   <script>if (localStorage.getItem("field-notes-help-v1") === "off") document.documentElement.classList.add("no-help");</script>
   <header>
-    <div><strong>Field Notes</strong><span>Game mode</span></div>
-    <div style="display:flex;gap:16px;align-items:center"><label class="help-toggle" title="When on, foul balls that clear the foul wall stop there. Turn off to watch them fly."><input type="checkbox" id="foul-stop"> Stop fouls</label><label class="help-toggle" title="When on, home runs stop at the fence. Turn off to watch them fly all the way down."><input type="checkbox" id="hr-stop"> Stop home runs</label><label class="help-toggle" title="Show or hide the small i hints next to settings"><input type="checkbox" id="help-toggle"> Show hints</label><a href="league.html" target="_blank">League</a><a href="index.html">&larr; Spray chart</a></div>
+    <div><strong>Field Notes</strong><span>Exhibition Game</span></div>
+    <div style="display:flex;gap:16px;align-items:center"><label class="help-toggle" title="When on, foul balls that clear the foul wall stop there. Turn off to watch them fly."><input type="checkbox" id="foul-stop"> Stop fouls</label><label class="help-toggle" title="When on, home runs stop at the fence. Turn off to watch them fly all the way down."><input type="checkbox" id="hr-stop"> Stop home runs</label><label class="help-toggle" title="Show or hide the small i hints next to settings"><input type="checkbox" id="help-toggle"> Show hints</label><a href="dashboard.html#exhibition" target="_top">Game dashboard</a><a href="index.html" target="_top">&larr; Spray chart</a></div>
   </header>
   <main>
     <section id="setup">
@@ -489,9 +489,11 @@
   <script src="fielding-motion.js"></script>
   <script src="game-engine.js"></script>
   <script src="league-engine.js"></script>
+  <script src="customizations.js"></script>
   <script>
   (() => {
     const E = window.GameEngine;
+    const C = window.Customizations;
     const $ = (id) => document.getElementById(id);
     const TEAMS_KEY = "field-notes-game-teams-v1";
     const SPRAY_KEY = "field-notes-spray-chart-v1";
@@ -623,8 +625,8 @@
     const FIRST_SEASON = 2015;
     const seasonOf = (team) => {
       const y = team && team.year;
-      if (y && y !== latestYear && window.MLB_SEASONS && window.MLB_SEASONS[y]) return window.MLB_SEASONS[y];
-      return window.MLB_PLAYERS;
+      if (y && y !== latestYear && window.MLB_SEASONS && window.MLB_SEASONS[y]) return C.data(window.MLB_SEASONS[y]);
+      return C.data(window.MLB_PLAYERS);
     };
     function loadSeason(year, done) {
       if (year === latestYear || (window.MLB_SEASONS && window.MLB_SEASONS[year])) return done(true);
@@ -672,6 +674,18 @@
       return [withMeta(E.generateTeam("Away", "balanced", Date.now() % 100000), null, 0), withMeta(E.generateTeam("Home", "balanced", (Date.now() + 7) % 100000), null, 1)];
     }
     teams = loadTeams();
+    function permanentTeam(team) {
+      if (team.src) {
+        const club = window.LeagueEngine.CLUBS[({ OAK:"ATH", ARI:"AZ", WAS:"WSH" })[team.src.club] || team.src.club];
+        if (club) {
+          const name = team.src.club === "CLE" && team.src.year <= 2021 ? "Cleveland Indians" : club[0];
+          team = { ...team, name: team.src.year === latestYear ? name : `${team.src.year} ${name}`, abbr: team.src.club, color: club[1], park: club[2] };
+        }
+      }
+      return C.applyRoster(team, { ...window.MLB_SEASONS, [latestYear]: window.MLB_PLAYERS }, latestYear, true);
+    }
+    teams = teams.map(permanentTeam);
+    let customizationVersion = localStorage.getItem(C.KEY);
     // Session edits keep the original ratings in a hidden _orig, so what gets saved is always the unedited player.
     const saveTeams = () => { try { localStorage.setItem(TEAMS_KEY, JSON.stringify(teams, (k, v) => (v && v._orig ? { ...v, ...v._orig } : v))); } catch (error) { /* ignore */ } };
 
@@ -914,6 +928,8 @@
           team.color = club[1];
         } else team.name = teamSel.value;
         if (data.year !== latestYear) team.name = `${data.year} ${team.name}`;
+        Object.assign(team, C.metadata(data.year, teamSel.value, {}));
+        delete team.customId;
         saveTeams();
         renderTeams();
       });
@@ -933,14 +949,15 @@
 
       function addBatter(p, slot) {
         const next = {
+          ...C.attributes(p),
           name: p.name, bats: p.bats, contact: p.contact, power: p.power, eye: p.eye,
-          speed: p.speed, arm: p.arm, field: p.field, risk: p.risk, loft: p.loft, height: E.playerHeight(p), weight: E.playerWeight(p), mlb: p.id, natural: p.pos, alt: p.alt || []
+          speed: p.speed, arm: p.arm, field: p.field, risk: p.risk, loft: p.loft, height: E.playerHeight(p), weight: E.playerWeight(p), heightManual: p.heightManual, weightManual: p.weightManual, customYear: data.year, mlb: p.id, natural: p.pos, alt: p.alt || []
         };
         if (slot === -2) team.bench.push({ ...next, pos: p.pos });
         else team.lineup[slot] = { ...next, pos: team.lineup[slot].pos };
       }
       function addPitcher(p, slot) {
-        const next = { name: p.name, role: slot === 0 ? "SP" : "RP", throws: p.throws, velo: p.velo, control: p.control, movement: p.movement, stamina: p.stamina, height: E.playerHeight(p), weight: E.playerWeight(p), mlb: p.id };
+        const next = { ...C.attributes(p), name: p.name, role: slot === 0 ? "SP" : "RP", throws: p.throws, velo: p.velo, control: p.control, movement: p.movement, stamina: p.stamina, height: E.playerHeight(p), weight: E.playerWeight(p), heightManual: p.heightManual, weightManual: p.weightManual, customYear: data.year, mlb: p.id };
         if (slot < 0) team.pitchers.push(next);
         else team.pitchers[slot] = next;
       }
@@ -1005,10 +1022,11 @@
       const ovr = (p) => E.batterOverall(p);
       const bats = data.batters.filter((p) => p.team === code).sort((a, b) => ovr(b) - ovr(a));
       const toBatter = (p, pos) => ({
+        ...C.attributes(p),
         name: p.name, pos, bats: p.bats, contact: p.contact, power: p.power, eye: p.eye,
-        speed: p.speed, arm: p.arm, field: p.field, risk: p.risk, loft: p.loft, height: E.playerHeight(p), weight: E.playerWeight(p), mlb: p.id, natural: p.pos, alt: p.alt || []
+        speed: p.speed, arm: p.arm, field: p.field, risk: p.risk, loft: p.loft, height: E.playerHeight(p), weight: E.playerWeight(p), heightManual: p.heightManual, weightManual: p.weightManual, customYear: data.year, mlb: p.id, natural: p.pos, alt: p.alt || []
       });
-      const toPitcher = (p, role) => ({ name: p.name, role, throws: p.throws, velo: p.velo, control: p.control, movement: p.movement, stamina: p.stamina, height: E.playerHeight(p), weight: E.playerWeight(p), mlb: p.id });
+      const toPitcher = (p, role) => ({ ...C.attributes(p), name: p.name, role, throws: p.throws, velo: p.velo, control: p.control, movement: p.movement, stamina: p.stamina, height: E.playerHeight(p), weight: E.playerWeight(p), heightManual: p.heightManual, weightManual: p.weightManual, customYear: data.year, mlb: p.id });
       const left = bats.slice();
       const take = (p) => { left.splice(left.indexOf(p), 1); return p; };
       const spots = {};
@@ -1081,10 +1099,11 @@
       const pits = data.pitchers.map((p) => ({ p, w: weight(E.pitcherOverall(p)) }));
       const bScore = (x) => x.w;
       const toBatter = (p, pos) => ({
+        ...C.attributes(p),
         name: p.name, pos, bats: p.bats, contact: p.contact, power: p.power, eye: p.eye,
-        speed: p.speed, arm: p.arm, field: p.field, risk: p.risk, loft: p.loft, height: E.playerHeight(p), weight: E.playerWeight(p), mlb: p.id, natural: p.pos, alt: p.alt || []
+        speed: p.speed, arm: p.arm, field: p.field, risk: p.risk, loft: p.loft, height: E.playerHeight(p), weight: E.playerWeight(p), heightManual: p.heightManual, weightManual: p.weightManual, customYear: data.year, mlb: p.id, natural: p.pos, alt: p.alt || []
       });
-      const toPitcher = (p, role) => ({ name: p.name, role, throws: p.throws, velo: p.velo, control: p.control, movement: p.movement, stamina: p.stamina, height: E.playerHeight(p), weight: E.playerWeight(p), mlb: p.id });
+      const toPitcher = (p, role) => ({ ...C.attributes(p), name: p.name, role, throws: p.throws, velo: p.velo, control: p.control, movement: p.movement, stamina: p.stamina, height: E.playerHeight(p), weight: E.playerWeight(p), heightManual: p.heightManual, weightManual: p.weightManual, customYear: data.year, mlb: p.id });
       const lineup = ["C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH"].map((pos) => {
         const x = draw(bats.filter((b) => b.p.pos === pos), bScore) || draw(bats, bScore);
         const at = bats.indexOf(x);
@@ -1115,7 +1134,27 @@
     /* Compact roster rows: hover for attributes, click to edit them for this session only. */
     const ATTR_LABELS = { contact: "CON", power: "PWR", eye: "EYE", speed: "SPD", arm: "ARM", field: "FLD", risk: "RISK", velo: "VELO", control: "CTL", movement: "MOV", stamina: "STA" };
     const PIT_KEYS = ["velo", "control", "movement", "stamina"];
-    const EDIT_KEYS = ["name", "pos", "bats", "throws", "height", "heightManual", "weight", "weightManual", ...BAT_KEYS, ...PIT_KEYS];
+    const EDIT_KEYS = ["name", "pos", "bats", "throws", "height", "heightManual", "weight", "weightManual", "mlb", "customYear", ...BAT_KEYS, ...PIT_KEYS];
+    function rememberOriginal(player) {
+      if (player._orig) return;
+      const snap = {};
+      for (const k of EDIT_KEYS) if (player[k] !== undefined) snap[k] = player[k];
+      Object.defineProperty(player, "_orig", { value: snap, writable: true, configurable: true, enumerable: false });
+    }
+    function adjustTeamRatings(team, delta) {
+      const adjust = (player, isPitcher) => {
+        const keys = isPitcher ? [...BAT_KEYS, ...PIT_KEYS] : BAT_KEYS;
+        for (const key of keys) {
+          if (player[key] === undefined) player[key] = isPitcher && key === "field" ? 40 : 50;
+        }
+        rememberOriginal(player);
+        for (const key of keys) {
+          player[key] = Math.max(0, player[key] + delta);
+        }
+      };
+      for (const player of [...team.lineup, ...team.bench]) adjust(player, false);
+      for (const player of team.pitchers) adjust(player, true);
+    }
     const attrSummary = (p, isPitcher) => (isPitcher ? PIT_KEYS : BAT_KEYS).map((k) => `${ATTR_LABELS[k]} ${p[k] ?? "–"}`).join(" · ") + ` · Height ${E.playerHeight(p)} in · Weight ${E.playerWeight(p)} lb`;
     function showRowTip(row, p, isPitcher) {
       const pop = $("tip-pop");
@@ -1130,7 +1169,7 @@
       pop.style.left = Math.max(6, Math.min(innerWidth - w - 6, r.left + 40)) + "px";
       pop.style.top = Math.max(6, r.bottom + 4 + h > innerHeight ? r.top - h - 4 : r.bottom + 4) + "px";
     }
-    const seasonData = (y) => (y === latestYear ? window.MLB_PLAYERS : window.MLB_SEASONS && window.MLB_SEASONS[y]);
+    const seasonData = (y) => C.data(y === latestYear ? window.MLB_PLAYERS : window.MLB_SEASONS && window.MLB_SEASONS[y]);
     // Search box for the edit popup: pick a season and a real player to fill in all of the ratings.
     function editorSearch(player, isPitcher, applied, isNew) {
       const box = document.createElement("div");
@@ -1164,11 +1203,13 @@
           b.style.cssText = "display:block;width:100%;text-align:left;margin-top:3px";
           b.textContent = `${p.name} · ${p.team} ${y} · ${isPitcher ? p.role : p.pos} · OVR ${Math.round(isPitcher ? E.pitcherOverall(p) : E.batterOverall(p))}`;
           b.addEventListener("click", () => {
-            if (isPitcher) Object.assign(player, { name: p.name, throws: p.throws, velo: p.velo, control: p.control, movement: p.movement, stamina: p.stamina, height: E.playerHeight(p), weight: E.playerWeight(p), mlb: p.id });
+            Object.assign(player, C.attributes(p));
+            if (isPitcher) Object.assign(player, { name: p.name, throws: p.throws, velo: p.velo, control: p.control, movement: p.movement, stamina: p.stamina, height: E.playerHeight(p), weight: E.playerWeight(p), customYear: y, mlb: p.id });
             else Object.assign(player, { name: p.name, bats: p.bats, contact: p.contact, power: p.power, eye: p.eye, speed: p.speed, arm: p.arm, field: p.field, risk: p.risk, loft: p.loft, height: E.playerHeight(p), weight: E.playerWeight(p), mlb: p.id, natural: p.pos, alt: p.alt || [] });
+            player.customYear = y;
             if (!isPitcher && isNew) player.pos = p.pos;
-            player.heightManual = false;
-            player.weightManual = false;
+            player.heightManual = !!p.heightManual;
+            player.weightManual = !!p.weightManual;
             applied();
           });
           results.append(b);
@@ -1184,11 +1225,7 @@
       player.heightManual = !!player.heightManual;
       player.weight = E.playerWeight(player);
       player.weightManual = !!player.weightManual;
-      if (!player._orig) {
-        const snap = {};
-        for (const k of EDIT_KEYS) if (player[k] !== undefined) snap[k] = player[k];
-        Object.defineProperty(player, "_orig", { value: snap, writable: true, configurable: true, enumerable: false });
-      }
+      rememberOriginal(player);
       const wrap = document.createElement("div");
       wrap.className = "modal-back";
       const box = document.createElement("div");
@@ -1339,6 +1376,47 @@
         strip.dataset.teamrate = ti;
         strip.style.cssText = "margin-top:8px;padding:8px 10px;border:1px solid #0002;border-radius:8px";
         card.append(strip);
+        const customTeams = C.fictional();
+        if (customTeams.length) {
+          const customRow = document.createElement("div");
+          customRow.className = "row";
+          customRow.style.marginTop = "8px";
+          const customSelect = document.createElement("select");
+          customSelect.setAttribute("aria-label", `Saved custom team for ${ti === 0 ? "away" : "home"}`);
+          customTeams.forEach(t => customSelect.add(new Option(t.name, t.customId)));
+          const loadCustom = document.createElement("button");
+          loadCustom.textContent = "Load custom team";
+          loadCustom.addEventListener("click", () => {
+            teams[ti] = C.fictional().find(t => t.customId === customSelect.value);
+            saveTeams();
+            renderTeams();
+          });
+          customRow.append(customSelect, loadCustom);
+          card.append(customRow);
+        }
+        const balance = document.createElement("div");
+        balance.className = "row";
+        balance.style.marginTop = "8px";
+        const balanceLabel = document.createElement("span");
+        balanceLabel.textContent = "Team ratings";
+        balance.append(balanceLabel);
+        for (const delta of [-1, 1]) {
+          const button = document.createElement("button");
+          button.textContent = delta > 0 ? "+1" : "-1";
+          button.setAttribute("aria-label", `${delta > 0 ? "Upgrade" : "Downgrade"} ${ti === 0 ? "away" : "home"} team ratings by 1`);
+          button.addEventListener("click", () => {
+            adjustTeamRatings(team, delta);
+            saveTeams();
+            renderTeams();
+          });
+          balance.append(button);
+        }
+        const balanceNote = document.createElement("span");
+        balanceNote.className = "muted";
+        balanceNote.style.fontSize = "12px";
+        balanceNote.textContent = "Every rating, every player (including bench and pitchers). Session only; 0 minimum, no upper cap. VELO changes by 1 rating point, not 1 mph.";
+        balance.append(balanceNote);
+        card.append(balance);
         if (window.MLB_PLAYERS) card.append(playerSearch(team, ti));
         const batters = document.createElement("table");
         batters.className = "roster";
@@ -1399,6 +1477,7 @@
             const next = data.batters.filter((p) => p.team === src.club && !used.has(p.id)).sort((a, b) => E.batterOverall(b) - E.batterOverall(a))[0];
             if (next) {
               team.bench.push({
+                ...C.attributes(next), heightManual: next.heightManual, weightManual: next.weightManual, customYear: src.year,
                 name: next.name, pos: next.pos, bats: next.bats, contact: next.contact, power: next.power, eye: next.eye,
                 speed: next.speed, arm: next.arm, field: next.field, risk: next.risk, loft: next.loft, height: E.playerHeight(next), weight: E.playerWeight(next), mlb: next.id, natural: next.pos, alt: next.alt || []
               });
@@ -1448,7 +1527,31 @@
       updateRatings();
     }
     renderTeams();
-    teams.forEach((t) => { if (t.year && t.year !== latestYear) loadSeason(t.year, (ok) => { if (ok) renderTeams(); else delete t.year; }); });
+    function refreshPermanentTeams() {
+      teams.forEach((team, i) => {
+        const years = new Set([team.year, team.src && team.src.year, ...[...team.lineup, ...team.bench, ...team.pitchers].map(p => p.customYear)].filter(y => y && y !== latestYear));
+        for (const year of years) loadSeason(year, ok => {
+          if (!ok) { alert(`Couldn't load ${year} custom player defaults.`); return; }
+          teams[i] = permanentTeam(teams[i]);
+          renderTeams();
+        });
+      });
+    }
+    refreshPermanentTeams();
+    function refreshCustomization() {
+      const version = localStorage.getItem(C.KEY);
+      if (game || version === customizationVersion) return;
+      try {
+        teams = loadTeams().map(permanentTeam);
+        customizationVersion = version;
+        refreshPermanentTeams();
+        renderTeams();
+      } catch (error) { alert(`Couldn't apply customizations: ${error.message}`); }
+    }
+    window.addEventListener("focus", refreshCustomization);
+    window.addEventListener("message", event => {
+      if (event.source === parent && event.data && event.data.type === "dashboard-activate") refreshCustomization();
+    });
 
     /* ------------------------------------------------------------ league game */
 
@@ -1563,6 +1666,7 @@
       liveRun = null;
       game = null;
       $("setup").classList.remove("hidden");
+      refreshCustomization();
     });
 
     const human = () => game && !game.over && controls[game.half] !== "sim";

@@ -68,11 +68,12 @@
   };
 
   const toBatter = (p, pos) => ({
-    name: p.name, pos, bats: p.bats, contact: p.contact, power: p.power, eye: p.eye, speed: p.speed, arm: p.arm,
-    field: p.field, risk: p.risk, loft: p.loft, height: GE.playerHeight(p), weight: GE.playerWeight(p), mlb: p.id, natural: p.pos, alt: p.alt || []
+    name: p.name, pos, bats: p.bats, throws: p.throws, contact: p.contact, power: p.power, eye: p.eye, speed: p.speed, arm: p.arm,
+    field: p.field, risk: p.risk, loft: p.loft, height: GE.playerHeight(p), weight: GE.playerWeight(p), heightManual: p.heightManual, weightManual: p.weightManual, customYear: p.customYear, mlb: p.id, natural: p.pos, alt: p.alt || []
   });
   const toPitcher = (p, role) => ({
-    name: p.name, role, throws: p.throws, velo: p.velo, control: p.control, movement: p.movement, stamina: p.stamina, height: GE.playerHeight(p), weight: GE.playerWeight(p), mlb: p.id
+    name: p.name, role, bats: p.bats, throws: p.throws, contact: p.contact, power: p.power, eye: p.eye, speed: p.speed,
+    arm: p.arm, field: p.field, risk: p.risk, loft: p.loft, velo: p.velo, control: p.control, movement: p.movement, stamina: p.stamina, height: GE.playerHeight(p), weight: GE.playerWeight(p), heightManual: p.heightManual, weightManual: p.weightManual, customYear: p.customYear, mlb: p.id
   });
 
   /* Best lineup, bench, rotation and bullpen from one real club's players. */
@@ -139,8 +140,9 @@
   function rosterFromTeam(team, s) {
     const t = clone(team);
     const sps = t.pitchers.filter((p) => p.role === 'SP');
-    const rotation = (sps.length ? sps : t.pitchers.slice(0, 1)).slice(0, s.rotation).map((p) => ({ ...p, role: 'SP' }));
-    const bullpen = t.pitchers.filter((p) => !rotation.includes(p)).slice(0, s.bullpen).map((p) => ({ ...p, role: 'RP' }));
+    const starters = (sps.length ? sps : t.pitchers.slice(0, 1)).slice(0, s.rotation);
+    const rotation = starters.map((p) => ({ ...p, role: 'SP' }));
+    const bullpen = t.pitchers.filter((p) => !starters.includes(p)).slice(0, s.bullpen).map((p) => ({ ...p, role: 'RP' }));
     while (rotation.length + bullpen.length < 5) bullpen.push(filler('arm'));
     const bench = (t.bench || []).slice(0, s.bench);
     while (bench.length < 3) bench.push(filler('bat', 'DH'));
@@ -356,7 +358,7 @@
       return {
         name: d.name, abbr: d.abbr || d.name.slice(0, 3).toUpperCase(), color: d.color || PALETTE[i % PALETTE.length],
         park: d.park || GE.PARK_LIST[i % GE.PARK_LIST.length].id, league: d.league || 'A', division: d.division || 'East',
-        code: d.code || null, roster, rot: 0, pst: {}
+        code: d.code || null, customId: d.roster && d.roster.customId, src: d.roster && d.roster.src, roster, rot: 0, pst: {}
       };
     });
     const league = {
@@ -450,7 +452,7 @@
     for (const ch of String(id)) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0;
     return h;
   };
-  const pkey = (team, p) => (p.mlb ? `m${p.mlb}` : p.name);
+  const pkey = (team, p) => (p.mlb ? `m${p.mlb}` : p.customPlayerId || p.name);
 
   function prepareTeam(league, idx, rng) {
     const t = league.teams[idx];
@@ -517,9 +519,9 @@
       for (const p of [...t.lineup, ...t.removed]) {
         if (seen.has(p)) continue;
         seen.add(p);
-        bat.push({ name: p.name, mlb: p.mlb, stat: pick(p.stat, BAT_KEYS) });
+        bat.push({ name: p.name, mlb: p.mlb, customPlayerId: p.customPlayerId, stat: pick(p.stat, BAT_KEYS) });
       }
-      const pit = t.pitchers.filter((p) => p.stat && (p.stat.bf > 0 || p.stat.outs > 0)).map((p) => ({ name: p.name, mlb: p.mlb, stat: pick(p.stat, PIT_KEYS) }));
+      const pit = t.pitchers.filter((p) => p.stat && (p.stat.bf > 0 || p.stat.outs > 0)).map((p) => ({ name: p.name, mlb: p.mlb, customPlayerId: p.customPlayerId, stat: pick(p.stat, PIT_KEYS) }));
       return { bat, pit };
     });
     const w = sides[win].pit;
